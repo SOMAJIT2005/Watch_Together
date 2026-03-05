@@ -1,281 +1,175 @@
 import sys
 import os
 import socketio
-from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QTextEdit, QLineEdit, QStackedWidget, QLabel, QMessageBox
+# Notice: We removed 'import yt_dlp' from up here to make the app boot instantly!
+
+from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
+                               QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
+                               QLineEdit, QLabel, QMessageBox, 
+                               QInputDialog, QSlider)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QUrl, Signal, Slot, Qt
+from PySide6.QtCore import QUrl, Signal, Slot, Qt, QThread
 
-# Create the Socket.IO client globally
 sio = socketio.Client()
 
+# --- NEW: THE BACKGROUND YOUTUBE EXTRACTOR ---
+class YouTubeExtractor(QThread):
+    finished_signal = Signal(str, str, str) # title, direct_url, original_url
+    error_signal = Signal(str)
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        # ⚡ LAZY LOADING: We only import the heavy YouTube library WHEN you paste a link!
+        import yt_dlp 
+        
+        try:
+            # We ask YouTube for the best quality raw MP4 it has
+            ydl_opts = {'format': 'best[ext=mp4]/best', 'quiet': True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(self.url, download=False)
+                direct_url = info.get('url', None)
+                title = info.get('title', 'YouTube Video')
+                
+                if direct_url:
+                    self.finished_signal.emit(title, direct_url, self.url)
+                else:
+                    self.error_signal.emit("Could not extract raw video stream.")
+        except Exception as e:
+            self.error_signal.emit(f"Extraction failed: {str(e)}")
+# ---------------------------------------------
+
 class VideoPlayer(QMainWindow):
-    # Define signals for thread-safe UI updates
     sync_signal = Signal(dict)
-    chat_signal = Signal(dict)
+    chat_signal = Signal(dict)  
     file_signal = Signal(dict)
     host_update_signal = Signal(dict)
     host_request_signal = Signal(dict)
 
-    def __init__(self):
+    def __init__(self, username):
         super().__init__()
-        self.setWindowTitle("Watch Together - Host Mode")
-        self.resize(1100, 650)
+        
+        # 🔴 YOUR CLOUD SERVER URL
+        self.server_url = 'https://watch-together-6kuy.onrender.com' 
+        
+        self.username = username
+        self.setWindowTitle(f"Watch Together - {self.username}")
+        self.resize(1100, 650) 
 
-        # --- State Variables ---
-        self.my_filename = None
-        self.friend_filename = None
+        self.my_filename = None       
+        self.friend_filename = None   
         self.is_host = False
-        self.current_host_name = "Unknown"
         self.my_sid = None
-        # -----------------------
+        self.extractor_thread = None 
 
-        # Main UI Setup
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
 
-        # ================= LEFT PANEL: MEDIA PLAYER =================
+        # ================= LEFT PANEL =================
         self.media_layout = QVBoxLayout()
-
-        # --- Top Bar: Host Status & Request Button ---
-        self.top_bar = QHBoxLayout()
         
-        # Host Status Label
-        self.host_status_label = QLabel("👑 Host: Finding...")
+        # --- Top Bar ---
+        self.top_bar = QHBoxLayout()
+        self.host_status_label = QLabel("👑 Host: Connecting...")
         self.host_status_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
         
-        # Request Host Button
         self.request_host_btn = QPushButton("🙋 Request Host")
         self.request_host_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
         self.request_host_btn.clicked.connect(self.request_host_clicked)
-        self.request_host_btn.hide() # Hidden by default, shown if not host
+        self.request_host_btn.hide()
+
+        self.fullscreen_btn = QPushButton("⛶ Fullscreen")
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
 
         self.top_bar.addWidget(self.host_status_label)
-        self.top_bar.addStretch() # Push the button to the right
+        self.top_bar.addStretch()
         self.top_bar.addWidget(self.request_host_btn)
+        self.top_bar.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(self.top_bar)
-        # -----------------------------------------------------------
 
-        # --- Hybrid Media Stack (Local/Web) ---
-        self.media_stack = QStackedWidget()
-
-        # Card 0: Local Video
-        self.local_video_widget = QWidget()
-        self.local_layout = QVBoxLayout(self.local_video_widget)
-        self.local_layout.setContentsMargins(0,0,0,0)
+        # --- Media Player (PURE NATIVE VIDEO NOW) ---
         self.video_widget = QVideoWidget()
-        self.local_layout.addWidget(self.video_widget)
-        self.media_stack.addWidget(self.local_video_widget)
+        self.media_layout.addWidget(self.video_widget, stretch=1)
 
-        # Card 1: Web Browser
-        self.web_view = QWebEngineView()
-        self.media_stack.addWidget(self.web_view)
-
-        self.media_layout.addWidget(self.media_stack)
+        # --- Progress Bar (Seeker) ---
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, 0)
+        self.slider.sliderMoved.connect(self.set_position)
+        self.slider.setEnabled(False) 
+        self.media_layout.addWidget(self.slider)
 
         # --- Bottom Controls ---
         self.controls_layout = QHBoxLayout()
-
-        self.mode_btn = QPushButton("🌐 Switch to Web Mode")
-        self.mode_btn.clicked.connect(self.toggle_mode)
-        self.controls_layout.addWidget(self.mode_btn)
         
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Paste YouTube link & hit Enter")
-        self.url_input.hide()
-        self.url_input.returnPressed.connect(self.load_web_url)
+        self.url_input.setPlaceholderText("Paste YouTube Link here & hit Enter to Extract...")
+        self.url_input.returnPressed.connect(self.start_youtube_extraction)
         self.controls_layout.addWidget(self.url_input)
 
-        self.open_btn = QPushButton("📁 Open Video File")
+        self.open_btn = QPushButton("📁 Open Local Movie File")
         self.open_btn.clicked.connect(self.open_file)
         self.controls_layout.addWidget(self.open_btn)
 
         self.play_btn = QPushButton("⏯️ Play / Pause")
         self.play_btn.clicked.connect(self.play_pause_clicked)
-        self.play_btn.setEnabled(False) # Disabled by default until we know who the host is
+        self.play_btn.setEnabled(False) 
         self.controls_layout.addWidget(self.play_btn)
 
         self.media_layout.addLayout(self.controls_layout)
         self.main_layout.addLayout(self.media_layout, stretch=3)
 
-        # ================= RIGHT PANEL: CHAT =================
+        # ================= RIGHT PANEL =================
         self.chat_layout = QVBoxLayout()
         self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history.setReadOnly(True) 
         self.chat_layout.addWidget(self.chat_history)
 
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type a message and hit Enter...")
-        self.chat_input.returnPressed.connect(self.send_chat_message)
+        self.chat_input.returnPressed.connect(self.send_chat_message) 
         self.chat_layout.addWidget(self.chat_input)
 
         self.main_layout.addLayout(self.chat_layout, stretch=1)
 
-        # --- Media Engine & Networking Setup ---
+        # --- Media Engine Setup ---
         self.media_player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.media_player.setVideoOutput(self.video_widget)
         self.media_player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(0.8)
 
-        # Connect signals to slots
+        self.media_player.positionChanged.connect(self.position_changed)
+        self.media_player.durationChanged.connect(self.duration_changed)
+
+        # --- Networking ---
         self.sync_signal.connect(self.handle_network_sync)
-        self.chat_signal.connect(self.handle_network_chat)
+        self.chat_signal.connect(self.handle_network_chat) 
         self.file_signal.connect(self.handle_network_file)
         self.host_update_signal.connect(self.handle_host_update)
         self.host_request_signal.connect(self.handle_host_request_dialog)
-        
         self.connect_to_server()
 
-    # --- NETWORKING FUNCTIONS ---
-    def connect_to_server(self):
-        # Define network event handlers inside the method to access 'self'
-        @sio.on('connect')
-        def on_connect():
-            self.my_sid = sio.get_sid()
-            self.chat_history.append("<i>✅ Connected to Server!</i>")
+    # --- UI & MEDIA LOGIC ---
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
 
-        @sio.on('sync_event')
-        def on_sync(data):
-            self.sync_signal.emit(data)
+    def position_changed(self, position):
+        self.slider.setValue(position)
 
-        @sio.on('chat_event')
-        def on_chat(data):
-            self.chat_signal.emit(data)
+    def duration_changed(self, duration):
+        self.slider.setRange(0, duration)
 
-        @sio.on('file_info')
-        def on_file_info(data):
-            self.file_signal.emit(data)
-
-        @sio.on('host_update')
-        def on_host_update(data):
-            self.host_update_signal.emit(data)
-
-        @sio.on('host_request_received')
-        def on_host_request(data):
-            self.host_request_signal.emit(data)
-        
-        try:
-            # CHANGE THIS URL TO YOUR NGROK LINK WHEN TESTING WITH A FRIEND
-            sio.connect('http://127.0.0.1:5000')
-        except Exception as e:
-            self.chat_history.append(f"<i>⚠️ Connection failed: {e}</i>")
-
-    # --- HOSTING LOGIC ---
-
-    @Slot(dict)
-    def handle_host_update(self, data):
-        host_sid = data.get('host_sid')
-        host_name = data.get('host_name', 'Unknown')
-        
-        self.current_host_name = host_name
-        # Check if *I* am the new host
-        self.is_host = (host_sid == self.my_sid)
-
+    def set_position(self, position):
         if self.is_host:
-            self.host_status_label.setText(f"👑 Host: You ({host_name})")
-            self.host_status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 14px; padding: 5px;")
-            self.play_btn.setEnabled(True)
-            self.request_host_btn.hide()
-            self.chat_history.append("<i>🎉 You are now the Host! You have control.</i>")
-        else:
-            self.host_status_label.setText(f"👑 Host: {host_name}")
-            self.host_status_label.setStyleSheet("color: black; font-weight: bold; font-size: 14px; padding: 5px;")
-            self.play_btn.setEnabled(False)
-            self.request_host_btn.show()
-            self.chat_history.append(f"<i>ℹ️ {host_name} is now the Host.</i>")
-
-    def request_host_clicked(self):
-        # Send a request to the server
-        sio.emit('request_host')
-        self.chat_history.append("<i>🙋 Requesting Host status... waiting for response.</i>")
-        self.request_host_btn.setEnabled(False) # Disable button to prevent spamming
-
-    @Slot(dict)
-    def handle_host_request_dialog(self, data):
-        # This slot is only called if you are the current host
-        requester_name = data.get('requester_name')
-        requester_sid = data.get('requester_sid')
-
-        # Create a Yes/No dialog box
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Host Request")
-        msg_box.setText(f"{requester_name} wants to be the Host.")
-        msg_box.setInformativeText("Do you want to grant them control?")
-        msg_box.setIcon(QMessageBox.Question)
-        
-        grant_btn = msg_box.addButton("Grant Control", QMessageBox.AcceptRole)
-        deny_btn = msg_box.addButton("Deny", QMessageBox.RejectRole)
-        
-        msg_box.exec()
-
-        if msg_box.clickedButton() == grant_btn:
-            # Send the grant command back to the server
-            sio.emit('grant_host', {'new_host_sid': requester_sid})
-            self.chat_history.append(f"<i>✅ You granted Host status to {requester_name}.</i>")
-        else:
-            self.chat_history.append(f"<i>🚫 You denied the request from {requester_name}.</i>")
-
-    # --- PLAYBACK LOGIC (Updated for Host) ---
-
-    def play_pause_clicked(self):
-        # 1. Host Check: Only the host can click this button.
-        if not self.is_host:
-            # This shouldn't be reachable since the button is disabled, but good as a fallback.
-            self.chat_history.append("<i>⚠️ Only the Host can control playback.</i>")
-            return
-
-        # 2. Mismatch Check: Cannot play if files don't match.
-        if self.media_stack.currentIndex() == 0 and self.friend_filename and self.my_filename != self.friend_filename:
-            self.chat_history.append("<b style='color: red;'>⛔ Play Blocked: Video mismatch.</b>")
-            return 
-
-        # Send the appropriate command based on mode and state
-        if self.media_stack.currentIndex() == 0: # Local Mode
-            current_time = self.media_player.position()
-            if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-                sio.emit('sync_event', {'action': 'pause', 'time': current_time})
-                self.media_player.pause()
-            else:
-                sio.emit('sync_event', {'action': 'play', 'time': current_time})
-                self.media_player.play()
-        else: # Web Mode
-            sio.emit('sync_event', {'action': 'web_toggle', 'time': 0})
-            self.inject_web_toggle()
-
-    # --- (The rest of your existing functions remain unchanged) ---
-    # ... toggle_mode, load_web_url, inject_web_toggle, open_file, 
-    # handle_network_sync, handle_network_file, send_chat_message, handle_network_chat ...
-
-    # --- HYBRID MODE LOGIC ---
-    def toggle_mode(self):
-        if self.media_stack.currentIndex() == 0:
-            self.media_stack.setCurrentIndex(1)
-            self.mode_btn.setText("🎬 Switch to Local Video")
-            self.url_input.show()
-            self.open_btn.hide()
-            self.media_player.pause()
-        else:
-            self.media_stack.setCurrentIndex(0)
-            self.mode_btn.setText("🌐 Switch to Web Mode")
-            self.url_input.hide()
-            self.open_btn.show()
-
-    def load_web_url(self):
-        url = self.url_input.text()
-        if url.strip() != "":
-            if not url.startswith("http"):
-                url = "https://" + url 
-            self.web_view.setUrl(QUrl(url))
-            self.chat_history.append(f"<i>🌐 Loading Webpage: {url}</i>")
-            sio.emit('chat_event', f"Load this URL: {url}")
-            self.url_input.clear()
-
-    def inject_web_toggle(self):
-        js_code = "var v = document.getElementsByTagName('video')[0]; if(v) { if(v.paused) v.play(); else v.pause(); }"
-        self.web_view.page().runJavaScript(js_code)
+            self.media_player.setPosition(position)
+            sio.emit('sync_event', {'action': 'seek', 'time': position})
 
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
@@ -286,36 +180,161 @@ class VideoPlayer(QMainWindow):
             self.media_player.pause()
             
             if self.friend_filename and self.my_filename != self.friend_filename:
-                 self.chat_history.append(f"<b style='color: red;'>❌ MISMATCH: You loaded '{filename}'. You must load '{self.friend_filename}' to unlock playback!</b>")
+                 self.chat_history.append(f"<b style='color: red;'>❌ MISMATCH: Load '{self.friend_filename}' to unlock!</b>")
             else:
-                 self.chat_history.append(f"<i>🎬 You loaded: {filename}. Ready.</i>")
-            sio.emit('file_info', {'filename': filename})
+                 self.chat_history.append(f"<i>🎬 Loaded Local File: {filename}.</i>")
+            sio.emit('file_info', {'filename': filename, 'type': 'local'})
+
+    # --- THE YOUTUBE MAGIC ---
+    def start_youtube_extraction(self):
+        url = self.url_input.text().strip()
+        if url:
+            self.url_input.clear()
+            self.chat_history.append("<i>⏳ Extracting raw video stream from YouTube... please wait.</i>")
+            
+            # Start the background worker
+            self.extractor_thread = YouTubeExtractor(url)
+            self.extractor_thread.finished_signal.connect(self.on_youtube_extracted)
+            self.extractor_thread.error_signal.connect(self.on_youtube_error)
+            self.extractor_thread.start()
+
+    @Slot(str, str, str)
+    def on_youtube_extracted(self, title, direct_url, original_url):
+        self.my_filename = original_url 
+        
+        # Feed the raw internet stream directly into our native player!
+        self.media_player.setSource(QUrl(direct_url))
+        self.media_player.pause()
+        
+        self.chat_history.append(f"<i>✅ Successfully Extracted: {title}</i>")
+        sio.emit('file_info', {'filename': title, 'type': 'youtube', 'url': original_url})
+
+    @Slot(str)
+    def on_youtube_error(self, error_msg):
+        self.chat_history.append(f"<b style='color: red;'>❌ Extraction Error: {error_msg}</b>")
+    # --------------------------
+
+    def play_pause_clicked(self):
+        if not self.is_host:
+            return 
+            
+        if self.friend_filename and self.my_filename != self.friend_filename:
+            self.chat_history.append("<b style='color: red;'>⛔ Play Blocked: Video mismatch. You must both load the same file/link.</b>")
+            return 
+
+        current_time = self.media_player.position() 
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            sio.emit('sync_event', {'action': 'pause', 'time': current_time})
+            self.media_player.pause()
+        else:
+            sio.emit('sync_event', {'action': 'play', 'time': current_time})
+            self.media_player.play()
+
+    # --- NETWORKING & HOSTING LOGIC ---
+    def connect_to_server(self):
+        @sio.on('connect')
+        def on_connect():
+            self.my_sid = sio.get_sid()
+            self.chat_history.append("<i>✅ Connected to Global Server!</i>")
+            sio.emit('join', {'name': self.username})
+
+        @sio.on('sync_event')
+        def on_sync(data): self.sync_signal.emit(data)
+        @sio.on('chat_event')
+        def on_chat(data): self.chat_signal.emit(data)
+        @sio.on('file_info')
+        def on_file_info(data): self.file_signal.emit(data)
+        @sio.on('host_update')
+        def on_host_update(data): self.host_update_signal.emit(data)
+        @sio.on('host_request_received')
+        def on_host_request(data): self.host_request_signal.emit(data)
+        
+        try:
+            sio.connect(self.server_url) 
+        except Exception as e:
+            self.chat_history.append("<i>⚠️ Could not connect to server.</i>")
+
+    @Slot(dict)
+    def handle_host_update(self, data):
+        host_sid = data.get('host_sid')
+        host_name = data.get('host_name', 'Unknown')
+        self.is_host = (host_sid == self.my_sid)
+
+        if self.is_host:
+            self.host_status_label.setText(f"👑 Host: You ({host_name})")
+            self.host_status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 14px; padding: 5px;")
+            self.play_btn.setEnabled(True)
+            self.slider.setEnabled(True)
+            self.request_host_btn.hide()
+            self.chat_history.append("<i>🎉 You are the Host! You have control.</i>")
+        else:
+            self.host_status_label.setText(f"👑 Host: {host_name}")
+            self.host_status_label.setStyleSheet("color: black; font-weight: bold; font-size: 14px; padding: 5px;")
+            self.play_btn.setEnabled(False)
+            self.slider.setEnabled(False)
+            self.request_host_btn.show()
+            self.chat_history.append(f"<i>ℹ️ {host_name} is now the Host.</i>")
+
+    def request_host_clicked(self):
+        sio.emit('request_host')
+        self.chat_history.append("<i>🙋 Requesting Host status... waiting.</i>")
+        self.request_host_btn.setEnabled(False) 
+
+    @Slot(dict)
+    def handle_host_request_dialog(self, data):
+        requester_name = data.get('requester_name')
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Host Request")
+        msg_box.setText(f"{requester_name} wants to be the Host. Grant control?")
+        msg_box.setIcon(QMessageBox.Question)
+        grant_btn = msg_box.addButton("Grant Control", QMessageBox.AcceptRole)
+        msg_box.addButton("Deny", QMessageBox.RejectRole)
+        msg_box.exec()
+
+        if msg_box.clickedButton() == grant_btn:
+            sio.emit('grant_host', {'new_host_sid': data.get('requester_sid')})
+            self.chat_history.append(f"<i>✅ You granted Host status to {requester_name}.</i>")
+        else:
+            self.chat_history.append(f"<i>🚫 You denied {requester_name}.</i>")
 
     @Slot(dict)
     def handle_network_sync(self, data):
+        if self.friend_filename and self.my_filename != self.friend_filename: return 
+        
         action = data.get('action')
-        if action == 'web_toggle':
-            if self.media_stack.currentIndex() == 1:
-                self.inject_web_toggle()
-            return
-        if self.friend_filename and self.my_filename != self.friend_filename:
-            return 
         sync_time = data.get('time', 0) 
-        self.media_player.setPosition(sync_time)
-        if action == 'pause':
+        
+        if action == 'seek':
+            self.media_player.setPosition(sync_time)
+        elif action == 'pause':
+            self.media_player.setPosition(sync_time)
             self.media_player.pause()
         elif action == 'play':
+            self.media_player.setPosition(sync_time)
             self.media_player.play()
 
     @Slot(dict)
     def handle_network_file(self, data):
+        file_type = data.get('type')
         filename = data.get('filename')
         sender = data.get('sender', 'Friend')
-        self.friend_filename = filename 
-        if self.my_filename and self.my_filename != self.friend_filename:
-            self.chat_history.append(f"<b style='color: red;'>❌ ERROR: {sender} loaded '{filename}'. Mismatch!</b>")
-        elif not self.my_filename:
-            self.chat_history.append(f"<b style='color: #ff9900;'>⚠️ {sender} wants to watch: {filename}</b>")
+        
+        if file_type == 'youtube':
+            yt_url = data.get('url')
+            self.friend_filename = yt_url 
+            self.chat_history.append(f"<b style='color: #00ccff;'>🌐 {sender} loaded YouTube: {filename}. Copying stream...</b>")
+            
+            self.extractor_thread = YouTubeExtractor(yt_url)
+            self.extractor_thread.finished_signal.connect(self.on_youtube_extracted)
+            self.extractor_thread.error_signal.connect(self.on_youtube_error)
+            self.extractor_thread.start()
+            
+        else: 
+            self.friend_filename = filename 
+            if self.my_filename and self.my_filename != self.friend_filename:
+                self.chat_history.append(f"<b style='color: red;'>❌ ERROR: {sender} loaded '{filename}'. Mismatch!</b>")
+            elif not self.my_filename:
+                self.chat_history.append(f"<b style='color: #ff9900;'>⚠️ {sender} loaded local file: {filename}</b>")
 
     def send_chat_message(self):
         text = self.chat_input.text()
@@ -326,13 +345,18 @@ class VideoPlayer(QMainWindow):
 
     @Slot(dict)
     def handle_network_chat(self, data):
-        sender = data.get('sender', 'Friend')
+        sender = data.get('sender', 'System')
         text = data.get('text')
         self.chat_history.append(f"<b>{sender}:</b> {text}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    player = VideoPlayer()
+    
+    username, ok = QInputDialog.getText(None, "Welcome to Watch Together", "Enter your username:")
+    if not ok or not username.strip():
+        username = "Guest" 
+        
+    player = VideoPlayer(username.strip())
     player.show()
     app.aboutToQuit.connect(sio.disconnect)
     sys.exit(app.exec())
