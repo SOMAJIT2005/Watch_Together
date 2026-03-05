@@ -1,7 +1,6 @@
 import sys
 import os
 import socketio
-# Notice: We removed 'import yt_dlp' from up here to make the app boot instantly!
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
@@ -13,9 +12,9 @@ from PySide6.QtCore import QUrl, Signal, Slot, Qt, QThread
 
 sio = socketio.Client()
 
-# --- NEW: THE BACKGROUND YOUTUBE EXTRACTOR ---
+# --- UPGRADED: THE BACKGROUND YOUTUBE CACHE DOWNLOADER ---
 class YouTubeExtractor(QThread):
-    finished_signal = Signal(str, str, str) # title, direct_url, original_url
+    finished_signal = Signal(str, str, str) # title, file_path, original_url
     error_signal = Signal(str)
 
     def __init__(self, url):
@@ -23,24 +22,37 @@ class YouTubeExtractor(QThread):
         self.url = url
 
     def run(self):
-        # ⚡ LAZY LOADING: We only import the heavy YouTube library WHEN you paste a link!
         import yt_dlp 
+        import os
         
         try:
-            # We ask YouTube for the best quality raw MP4 it has
-            ydl_opts = {'format': 'best[ext=mp4]/best', 'quiet': True}
+            # Create a hidden temp file in the app folder
+            save_path = os.path.join(os.getcwd(), "youtube_cache.mp4")
+            
+            # Delete the old cache if it exists so we don't fill up the hard drive
+            if os.path.exists(save_path):
+                os.remove(save_path)
+
+            # Secretly download the raw MP4
+            ydl_opts = {
+                'format': 'best[ext=mp4]/best',
+                'outtmpl': save_path,
+                'quiet': True,
+                'noplaylist': True,
+            }
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=False)
-                direct_url = info.get('url', None)
+                info = ydl.extract_info(self.url, download=True) # NOW SET TO TRUE
                 title = info.get('title', 'YouTube Video')
                 
-                if direct_url:
-                    self.finished_signal.emit(title, direct_url, self.url)
+                # Send the local file path to the player!
+                if os.path.exists(save_path):
+                    self.finished_signal.emit(title, save_path, self.url)
                 else:
-                    self.error_signal.emit("Could not extract raw video stream.")
+                    self.error_signal.emit("Failed to save video to disk.")
         except Exception as e:
             self.error_signal.emit(f"Extraction failed: {str(e)}")
-# ---------------------------------------------
+# ---------------------------------------------------------
 
 class VideoPlayer(QMainWindow):
     sync_signal = Signal(dict)
@@ -52,7 +64,7 @@ class VideoPlayer(QMainWindow):
     def __init__(self, username):
         super().__init__()
         
-        # 🔴 YOUR CLOUD SERVER URL
+        # YOUR RENDER URL
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
         
         self.username = username
@@ -91,7 +103,7 @@ class VideoPlayer(QMainWindow):
         self.top_bar.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(self.top_bar)
 
-        # --- Media Player (PURE NATIVE VIDEO NOW) ---
+        # --- Media Player ---
         self.video_widget = QVideoWidget()
         self.media_layout.addWidget(self.video_widget, stretch=1)
 
@@ -106,7 +118,7 @@ class VideoPlayer(QMainWindow):
         self.controls_layout = QHBoxLayout()
         
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Paste YouTube Link here & hit Enter to Extract...")
+        self.url_input.setPlaceholderText("Paste YouTube Link here & hit Enter...")
         self.url_input.returnPressed.connect(self.start_youtube_extraction)
         self.controls_layout.addWidget(self.url_input)
 
@@ -144,6 +156,9 @@ class VideoPlayer(QMainWindow):
 
         self.media_player.positionChanged.connect(self.position_changed)
         self.media_player.durationChanged.connect(self.duration_changed)
+        
+        # NEW: Error tracking just in case!
+        self.media_player.errorOccurred.connect(self.handle_media_error)
 
         # --- Networking ---
         self.sync_signal.connect(self.handle_network_sync)
@@ -154,6 +169,10 @@ class VideoPlayer(QMainWindow):
         self.connect_to_server()
 
     # --- UI & MEDIA LOGIC ---
+    @Slot(QMediaPlayer.Error, str)
+    def handle_media_error(self, error, error_string):
+        self.chat_history.append(f"<b style='color: red;'>⚠️ Player Error: {error_string}</b>")
+
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()
@@ -190,23 +209,22 @@ class VideoPlayer(QMainWindow):
         url = self.url_input.text().strip()
         if url:
             self.url_input.clear()
-            self.chat_history.append("<i>⏳ Extracting raw video stream from YouTube... please wait.</i>")
+            self.chat_history.append("<i>⏳ Downloading video temporarily... this may take 10-20 seconds. Please wait!</i>")
             
-            # Start the background worker
             self.extractor_thread = YouTubeExtractor(url)
             self.extractor_thread.finished_signal.connect(self.on_youtube_extracted)
             self.extractor_thread.error_signal.connect(self.on_youtube_error)
             self.extractor_thread.start()
 
     @Slot(str, str, str)
-    def on_youtube_extracted(self, title, direct_url, original_url):
+    def on_youtube_extracted(self, title, file_path, original_url):
         self.my_filename = original_url 
         
-        # Feed the raw internet stream directly into our native player!
-        self.media_player.setSource(QUrl(direct_url))
+        # Load the locally downloaded cache file!
+        self.media_player.setSource(QUrl.fromLocalFile(file_path))
         self.media_player.pause()
         
-        self.chat_history.append(f"<i>✅ Successfully Extracted: {title}</i>")
+        self.chat_history.append(f"<i>✅ Successfully Downloaded & Loaded: {title}</i>")
         sio.emit('file_info', {'filename': title, 'type': 'youtube', 'url': original_url})
 
     @Slot(str)
@@ -322,7 +340,7 @@ class VideoPlayer(QMainWindow):
         if file_type == 'youtube':
             yt_url = data.get('url')
             self.friend_filename = yt_url 
-            self.chat_history.append(f"<b style='color: #00ccff;'>🌐 {sender} loaded YouTube: {filename}. Copying stream...</b>")
+            self.chat_history.append(f"<b style='color: #00ccff;'>🌐 {sender} pasted a YouTube link. Downloading cache...</b>")
             
             self.extractor_thread = YouTubeExtractor(yt_url)
             self.extractor_thread.finished_signal.connect(self.on_youtube_extracted)
