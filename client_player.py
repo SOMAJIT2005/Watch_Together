@@ -1,5 +1,7 @@
 import sys
 import os
+import time
+import random
 import socketio
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
@@ -8,92 +10,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
                                QInputDialog, QSlider)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtCore import QUrl, Signal, Slot, Qt, QThread
+from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve
 
 sio = socketio.Client()
-
-# --- UPGRADED: THE BACKGROUND YOUTUBE CACHE DOWNLOADER ---
-# --- UPGRADED 2.0: THE PYTUBEFIX EXTRACTOR ---
-# --- THE SMART MIRROR ARRAY EXTRACTOR ---
-class YouTubeExtractor(QThread):
-    finished_signal = Signal(str, str, str) # title, file_path, original_url
-    error_signal = Signal(str)
-
-    def __init__(self, url):
-        super().__init__()
-        self.url = url
-
-    def run(self):
-        import requests
-        import re
-        import os
-        
-        try:
-            # 1. Strip the exact 11-character Video ID from the YouTube link
-            match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", self.url)
-            if not match:
-                self.error_signal.emit("Invalid YouTube Link.")
-                return
-            video_id = match.group(1)
-
-            # 2. The Fault-Tolerance Array: If one server is blocked, try the next!
-            mirrors = [
-                "https://invidious.jing.rocks",
-                "https://vid.puffyan.us",
-                "https://invidious.flokinet.to",
-                "https://inv.tux.pizza"
-            ]
-            
-            best_url = None
-            title = "YouTube Video"
-
-            for mirror in mirrors:
-                try:
-                    # Ask the open-source mirror to bypass YouTube's blocks for us
-                    api_url = f"{mirror}/api/v1/videos/{video_id}"
-                    response = requests.get(api_url, timeout=5)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        title = data.get("title", "YouTube Video")
-                        
-                        # Find a standard MP4 stream in the mirror's response
-                        for stream in data.get("formatStreams", []):
-                            if stream.get("container") == "mp4":
-                                best_url = stream.get("url")
-                                # 720p is the perfect balance for fast downloading
-                                if stream.get("resolution") == "720p":
-                                    break 
-                        
-                        if best_url:
-                            break # Success! Stop checking other mirrors.
-                except:
-                    continue # This mirror is dead/blocked, silently try the next one
-
-            if not best_url:
-                self.error_signal.emit("All mirrors failed. YouTube's defenses are too high today.")
-                return
-
-            # 3. Safely download the video to our local cache
-            save_path = os.path.join(os.getcwd(), "youtube_cache.mp4")
-            if os.path.exists(save_path):
-                os.remove(save_path)
-                
-            # Download it in chunks so we don't crash the RAM
-            with requests.get(best_url, stream=True) as r:
-                r.raise_for_status()
-                with open(save_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*1024): 
-                        f.write(chunk)
-
-            if os.path.exists(save_path):
-                self.finished_signal.emit(title, save_path, self.url)
-            else:
-                self.error_signal.emit("Failed to save the file to disk.")
-
-        except Exception as e:
-            self.error_signal.emit(f"Smart Bypass Failed: {str(e)}")
-# ----------------------------------------
 
 class VideoPlayer(QMainWindow):
     sync_signal = Signal(dict)
@@ -101,28 +20,30 @@ class VideoPlayer(QMainWindow):
     file_signal = Signal(dict)
     host_update_signal = Signal(dict)
     host_request_signal = Signal(dict)
+    reaction_signal = Signal(dict)
 
     def __init__(self, username):
         super().__init__()
         
-        # YOUR RENDER URL
+        # 🔴 YOUR RENDER URL
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
         
         self.username = username
-        self.setWindowTitle(f"Watch Together - {self.username}")
+        self.setWindowTitle(f"Watch Together - {self.username} | CSE 2100 Project")
         self.resize(1100, 650) 
 
         self.my_filename = None       
         self.friend_filename = None   
         self.is_host = False
         self.my_sid = None
-        self.extractor_thread = None 
+        self.active_animations = [] # Stores floating emojis
+        self.last_ping_time = 0
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
 
-        # ================= LEFT PANEL =================
+        # ================= LEFT PANEL (MEDIA) =================
         self.media_layout = QVBoxLayout()
         
         # --- Top Bar ---
@@ -130,6 +51,10 @@ class VideoPlayer(QMainWindow):
         self.host_status_label = QLabel("👑 Host: Connecting...")
         self.host_status_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
         
+        # NEW: The Ping/Latency Tracker
+        self.ping_label = QLabel("📶 Ping: -- ms")
+        self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: gray;")
+
         self.request_host_btn = QPushButton("🙋 Request Host")
         self.request_host_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
         self.request_host_btn.clicked.connect(self.request_host_clicked)
@@ -140,12 +65,14 @@ class VideoPlayer(QMainWindow):
 
         self.top_bar.addWidget(self.host_status_label)
         self.top_bar.addStretch()
+        self.top_bar.addWidget(self.ping_label)
         self.top_bar.addWidget(self.request_host_btn)
         self.top_bar.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(self.top_bar)
 
-        # --- Media Player ---
+        # --- Native Video Player ---
         self.video_widget = QVideoWidget()
+        self.video_widget.setStyleSheet("background-color: black;")
         self.media_layout.addWidget(self.video_widget, stretch=1)
 
         # --- Progress Bar (Seeker) ---
@@ -157,17 +84,14 @@ class VideoPlayer(QMainWindow):
 
         # --- Bottom Controls ---
         self.controls_layout = QHBoxLayout()
-        
-        self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Paste YouTube Link here & hit Enter...")
-        self.url_input.returnPressed.connect(self.start_youtube_extraction)
-        self.controls_layout.addWidget(self.url_input)
 
-        self.open_btn = QPushButton("📁 Open Local Movie File")
+        self.open_btn = QPushButton("📁 Open Local Movie File (.mp4)")
+        self.open_btn.setStyleSheet("padding: 10px; font-weight: bold;")
         self.open_btn.clicked.connect(self.open_file)
         self.controls_layout.addWidget(self.open_btn)
 
         self.play_btn = QPushButton("⏯️ Play / Pause")
+        self.play_btn.setStyleSheet("padding: 10px; font-weight: bold;")
         self.play_btn.clicked.connect(self.play_pause_clicked)
         self.play_btn.setEnabled(False) 
         self.controls_layout.addWidget(self.play_btn)
@@ -175,7 +99,7 @@ class VideoPlayer(QMainWindow):
         self.media_layout.addLayout(self.controls_layout)
         self.main_layout.addLayout(self.media_layout, stretch=3)
 
-        # ================= RIGHT PANEL =================
+        # ================= RIGHT PANEL (SOCIAL) =================
         self.chat_layout = QVBoxLayout()
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True) 
@@ -186,6 +110,16 @@ class VideoPlayer(QMainWindow):
         self.chat_input.returnPressed.connect(self.send_chat_message) 
         self.chat_layout.addWidget(self.chat_input)
 
+        # NEW: Live Floating Reaction Toolbar
+        self.reaction_toolbar = QHBoxLayout()
+        emojis = ["❤️", "😂", "😲", "🔥", "🎉"]
+        for e in emojis:
+            btn = QPushButton(e)
+            btn.setStyleSheet("font-size: 20px; padding: 5px; border-radius: 5px; background-color: #f0f0f0;")
+            btn.clicked.connect(lambda checked, emoji=e: self.send_reaction(emoji))
+            self.reaction_toolbar.addWidget(btn)
+            
+        self.chat_layout.addLayout(self.reaction_toolbar)
         self.main_layout.addLayout(self.chat_layout, stretch=1)
 
         # --- Media Engine Setup ---
@@ -197,28 +131,40 @@ class VideoPlayer(QMainWindow):
 
         self.media_player.positionChanged.connect(self.position_changed)
         self.media_player.durationChanged.connect(self.duration_changed)
-        
-        # NEW: Error tracking just in case!
-        self.media_player.errorOccurred.connect(self.handle_media_error)
 
-        # --- Networking ---
+        # --- Networking Setup ---
         self.sync_signal.connect(self.handle_network_sync)
         self.chat_signal.connect(self.handle_network_chat) 
         self.file_signal.connect(self.handle_network_file)
         self.host_update_signal.connect(self.handle_host_update)
         self.host_request_signal.connect(self.handle_host_request_dialog)
+        self.reaction_signal.connect(self.handle_incoming_reaction)
         self.connect_to_server()
 
-    # --- UI & MEDIA LOGIC ---
-    @Slot(QMediaPlayer.Error, str)
-    def handle_media_error(self, error, error_string):
-        self.chat_history.append(f"<b style='color: red;'>⚠️ Player Error: {error_string}</b>")
+        # Start the Background Ping Tracker (Fires every 2 seconds)
+        self.ping_timer = QTimer(self)
+        self.ping_timer.timeout.connect(self.send_ping)
+        self.ping_timer.start(2000)
 
+    # ================= OS DISTRACTION MONITOR =================
+    # This automatically detects if the user minimizes or clicks away from the app
+    def changeEvent(self, event):
+        if event.type() == QEvent.ActivationChange:
+            if not self.isActiveWindow(): # App lost focus!
+                if self.is_host and self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                    # Auto-pause to protect the watch party
+                    self.play_pause_clicked()
+                    sio.emit('chat_event', "⚠️ <b>System Alert:</b> Host tabbed out! Video auto-paused to keep sync.")
+                elif not self.is_host:
+                    # Snitch on the guest!
+                    sio.emit('chat_event', "👀 <b>System Alert:</b> I just tabbed out of the watch party!")
+        super().changeEvent(event)
+    # ==========================================================
+
+    # --- UI & MEDIA LOGIC ---
     def toggle_fullscreen(self):
-        if self.isFullScreen():
-            self.showNormal()
-        else:
-            self.showFullScreen()
+        if self.isFullScreen(): self.showNormal()
+        else: self.showFullScreen()
 
     def position_changed(self, position):
         self.slider.setValue(position)
@@ -232,7 +178,7 @@ class VideoPlayer(QMainWindow):
             sio.emit('sync_event', {'action': 'seek', 'time': position})
 
     def open_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.avi *.mkv)")
         if file_path:
             filename = os.path.basename(file_path)
             self.my_filename = filename 
@@ -242,43 +188,13 @@ class VideoPlayer(QMainWindow):
             if self.friend_filename and self.my_filename != self.friend_filename:
                  self.chat_history.append(f"<b style='color: red;'>❌ MISMATCH: Load '{self.friend_filename}' to unlock!</b>")
             else:
-                 self.chat_history.append(f"<i>🎬 Loaded Local File: {filename}.</i>")
-            sio.emit('file_info', {'filename': filename, 'type': 'local'})
-
-    # --- THE YOUTUBE MAGIC ---
-    def start_youtube_extraction(self):
-        url = self.url_input.text().strip()
-        if url:
-            self.url_input.clear()
-            self.chat_history.append("<i>⏳ Downloading video temporarily... this may take 10-20 seconds. Please wait!</i>")
-            
-            self.extractor_thread = YouTubeExtractor(url)
-            self.extractor_thread.finished_signal.connect(self.on_youtube_extracted)
-            self.extractor_thread.error_signal.connect(self.on_youtube_error)
-            self.extractor_thread.start()
-
-    @Slot(str, str, str)
-    def on_youtube_extracted(self, title, file_path, original_url):
-        self.my_filename = original_url 
-        
-        # Load the locally downloaded cache file!
-        self.media_player.setSource(QUrl.fromLocalFile(file_path))
-        self.media_player.pause()
-        
-        self.chat_history.append(f"<i>✅ Successfully Downloaded & Loaded: {title}</i>")
-        sio.emit('file_info', {'filename': title, 'type': 'youtube', 'url': original_url})
-
-    @Slot(str)
-    def on_youtube_error(self, error_msg):
-        self.chat_history.append(f"<b style='color: red;'>❌ Extraction Error: {error_msg}</b>")
-    # --------------------------
+                 self.chat_history.append(f"<i>🎬 Loaded Local File: {filename}. Ready.</i>")
+            sio.emit('file_info', {'filename': filename})
 
     def play_pause_clicked(self):
-        if not self.is_host:
-            return 
-            
+        if not self.is_host: return 
         if self.friend_filename and self.my_filename != self.friend_filename:
-            self.chat_history.append("<b style='color: red;'>⛔ Play Blocked: Video mismatch. You must both load the same file/link.</b>")
+            self.chat_history.append("<b style='color: red;'>⛔ Play Blocked: Video mismatch. Both users must load the same file.</b>")
             return 
 
         current_time = self.media_player.position() 
@@ -288,6 +204,47 @@ class VideoPlayer(QMainWindow):
         else:
             sio.emit('sync_event', {'action': 'play', 'time': current_time})
             self.media_player.play()
+
+    # --- SOCIAL FEATURES (PINGS & REACTIONS) ---
+    def send_ping(self):
+        self.last_ping_time = time.time()
+        sio.emit('ping_server')
+
+    def send_reaction(self, emoji):
+        sio.emit('reaction_event', emoji)
+        # Show it on our own screen immediately
+        self.trigger_floating_emoji(emoji)
+
+    @Slot(dict)
+    def handle_incoming_reaction(self, data):
+        emoji = data.get('emoji')
+        sender = data.get('sender')
+        self.chat_history.append(f"<span style='color: gray; font-size: 10px;'><i>{sender} reacted {emoji}</i></span>")
+        self.trigger_floating_emoji(emoji)
+
+    def trigger_floating_emoji(self, emoji):
+        # Creates a temporary label that physically floats over the video player
+        label = QLabel(emoji, self.video_widget)
+        label.setStyleSheet("font-size: 48px; background: transparent;")
+        label.setAttribute(Qt.WA_TransparentForMouseEvents) # So it doesn't block mouse clicks
+        label.show()
+        
+        # Pick a random starting point at the bottom of the video
+        start_x = random.randint(20, max(20, self.video_widget.width() - 80))
+        start_y = self.video_widget.height() - 60
+        label.move(start_x, start_y)
+        
+        # Animate it upwards
+        anim = QPropertyAnimation(label, b"pos")
+        anim.setEndValue(QPoint(start_x, start_y - 250))
+        anim.setDuration(2500)
+        anim.setEasingCurve(QEasingCurve.OutExpo)
+        anim.finished.connect(label.deleteLater)
+        anim.start()
+        
+        # Prevent Python from deleting the animation too early
+        self.active_animations.append(anim)
+        self.active_animations = [a for a in self.active_animations if a.state() == QPropertyAnimation.State.Running]
 
     # --- NETWORKING & HOSTING LOGIC ---
     def connect_to_server(self):
@@ -307,11 +264,19 @@ class VideoPlayer(QMainWindow):
         def on_host_update(data): self.host_update_signal.emit(data)
         @sio.on('host_request_received')
         def on_host_request(data): self.host_request_signal.emit(data)
+        @sio.on('reaction_event')
+        def on_reaction(data): self.reaction_signal.emit(data)
         
-        try:
-            sio.connect(self.server_url) 
-        except Exception as e:
-            self.chat_history.append("<i>⚠️ Could not connect to server.</i>")
+        @sio.on('pong_client')
+        def on_pong():
+            latency = int((time.time() - self.last_ping_time) * 1000)
+            self.ping_label.setText(f"📶 Ping: {latency}ms")
+            if latency < 100: self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: green;")
+            elif latency < 250: self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: orange;")
+            else: self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: red;")
+
+        try: sio.connect(self.server_url) 
+        except: self.chat_history.append("<i>⚠️ Could not connect to server.</i>")
 
     @Slot(dict)
     def handle_host_update(self, data):
@@ -374,26 +339,14 @@ class VideoPlayer(QMainWindow):
 
     @Slot(dict)
     def handle_network_file(self, data):
-        file_type = data.get('type')
         filename = data.get('filename')
         sender = data.get('sender', 'Friend')
         
-        if file_type == 'youtube':
-            yt_url = data.get('url')
-            self.friend_filename = yt_url 
-            self.chat_history.append(f"<b style='color: #00ccff;'>🌐 {sender} pasted a YouTube link. Downloading cache...</b>")
-            
-            self.extractor_thread = YouTubeExtractor(yt_url)
-            self.extractor_thread.finished_signal.connect(self.on_youtube_extracted)
-            self.extractor_thread.error_signal.connect(self.on_youtube_error)
-            self.extractor_thread.start()
-            
-        else: 
-            self.friend_filename = filename 
-            if self.my_filename and self.my_filename != self.friend_filename:
-                self.chat_history.append(f"<b style='color: red;'>❌ ERROR: {sender} loaded '{filename}'. Mismatch!</b>")
-            elif not self.my_filename:
-                self.chat_history.append(f"<b style='color: #ff9900;'>⚠️ {sender} loaded local file: {filename}</b>")
+        self.friend_filename = filename 
+        if self.my_filename and self.my_filename != self.friend_filename:
+            self.chat_history.append(f"<b style='color: red;'>❌ ERROR: {sender} loaded '{filename}'. Mismatch!</b>")
+        elif not self.my_filename:
+            self.chat_history.append(f"<b style='color: #ff9900;'>⚠️ {sender} loaded local file: {filename}</b>")
 
     def send_chat_message(self):
         text = self.chat_input.text()
