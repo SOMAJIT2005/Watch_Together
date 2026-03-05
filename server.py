@@ -5,24 +5,19 @@ from flask_socketio import SocketIO, emit
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# --- Global State ---
 connected_users = {}
 current_host_sid = None
-# --------------------
 
 @socketio.on('join')
 def handle_join(data):
     global current_host_sid
-    # Save the custom username they typed in!
     user_name = data.get('name', f"User {request.sid[:4]}")
     connected_users[request.sid] = user_name
     print(f"🟢 {user_name} connected.")
 
-    # The first person to connect becomes the host.
     if current_host_sid is None:
         current_host_sid = request.sid
-        print(f"👑 {user_name} is now the Host.")
-    
+        
     emit('host_update', {'host_sid': current_host_sid, 'host_name': connected_users[current_host_sid]}, broadcast=True)
 
 @socketio.on('disconnect')
@@ -41,8 +36,6 @@ def handle_disconnect():
 def handle_sync(data):
     if request.sid == current_host_sid:
         emit('sync_event', data, broadcast=True, include_self=False)
-    else:
-        emit('chat_event', {'text': "<i>⚠️ Only the Host can control playback.</i>", 'sender': "System"}, room=request.sid)
 
 @socketio.on('chat_event')
 def handle_chat(text):
@@ -69,7 +62,17 @@ def handle_grant_host(data):
             current_host_sid = new_host_sid
             emit('host_update', {'host_sid': current_host_sid, 'host_name': connected_users[current_host_sid]}, broadcast=True)
 
+# --- NEW PRESENTATION FEATURES ---
+@socketio.on('reaction_event')
+def handle_reaction(emoji):
+    sender_name = connected_users.get(request.sid, "Unknown")
+    emit('reaction_event', {'emoji': emoji, 'sender': sender_name}, broadcast=True)
+
+@socketio.on('ping_server')
+def handle_ping():
+    # Instantly bounce the packet back to calculate latency
+    emit('pong_client', room=request.sid)
+
 if __name__ == '__main__':
-    print("🚀 Starting Watch Together Server in the Cloud...")
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
