@@ -13,6 +13,7 @@ from PySide6.QtCore import QUrl, Signal, Slot, Qt, QThread
 sio = socketio.Client()
 
 # --- UPGRADED: THE BACKGROUND YOUTUBE CACHE DOWNLOADER ---
+# --- UPGRADED 2.0: THE PYTUBEFIX EXTRACTOR ---
 class YouTubeExtractor(QThread):
     finished_signal = Signal(str, str, str) # title, file_path, original_url
     error_signal = Signal(str)
@@ -22,38 +23,38 @@ class YouTubeExtractor(QThread):
         self.url = url
 
     def run(self):
-        import yt_dlp 
         import os
-        
         try:
-            # Create a hidden temp file in the app folder
+            # ⚡ LAZY LOAD: Import our new smart bypass library
+            from pytubefix import YouTube
+            
+            # The Magic Bullet: We explicitly connect using the 'ANDROID' client token to bypass 403s
+            yt = YouTube(self.url, client='ANDROID')
+            
+            # Grab the best standard MP4 stream (Video + Audio combined)
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+            
+            if not stream:
+                self.error_signal.emit("No compatible MP4 stream found by PyTubeFix.")
+                return
+
             save_path = os.path.join(os.getcwd(), "youtube_cache.mp4")
             
-            # Delete the old cache if it exists so we don't fill up the hard drive
+            # Clean up old cache
             if os.path.exists(save_path):
-                os.remove(save_path)
+                try:
+                    os.remove(save_path)
+                except:
+                    pass
 
-            # Secretly download the raw MP4
-            ydl_opts = {
-                'format': 'best[ext=mp4]/best',
-                'outtmpl': save_path,
-                'quiet': True,
-                'noplaylist': True,
-                # --- NEW: THE 403 FORBIDDEN BYPASS ARMOR ---
-                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-                'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-                # -------------------------------------------
-            }
+            # Download straight to cache
+            stream.download(output_path=os.getcwd(), filename="youtube_cache.mp4")
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=True) # NOW SET TO TRUE
-                title = info.get('title', 'YouTube Video')
+            if os.path.exists(save_path):
+                self.finished_signal.emit(yt.title, save_path, self.url)
+            else:
+                self.error_signal.emit("Failed to save video to disk.")
                 
-                # Send the local file path to the player!
-                if os.path.exists(save_path):
-                    self.finished_signal.emit(title, save_path, self.url)
-                else:
-                    self.error_signal.emit("Failed to save video to disk.")
         except Exception as e:
             self.error_signal.emit(f"Extraction failed: {str(e)}")
 # ---------------------------------------------------------
