@@ -15,12 +15,14 @@ from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnim
 sio = socketio.Client()
 
 class VideoPlayer(QMainWindow):
+    # --- SIGNALS ---
     sync_signal = Signal(dict)
     chat_signal = Signal(dict)  
     file_signal = Signal(dict)
     host_update_signal = Signal(dict)
     host_request_signal = Signal(dict)
     reaction_signal = Signal(dict)
+    ping_signal = Signal(int) # NEW: Thread-safe signal for the ping meter!
 
     def __init__(self, username):
         super().__init__()
@@ -36,7 +38,7 @@ class VideoPlayer(QMainWindow):
         self.friend_filename = None   
         self.is_host = False
         self.my_sid = None
-        self.active_animations = [] # Stores floating emojis
+        self.active_animations = [] 
         self.last_ping_time = 0
 
         self.central_widget = QWidget()
@@ -51,7 +53,6 @@ class VideoPlayer(QMainWindow):
         self.host_status_label = QLabel("👑 Host: Connecting...")
         self.host_status_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
         
-        # NEW: The Ping/Latency Tracker
         self.ping_label = QLabel("📶 Ping: -- ms")
         self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: gray;")
 
@@ -110,7 +111,7 @@ class VideoPlayer(QMainWindow):
         self.chat_input.returnPressed.connect(self.send_chat_message) 
         self.chat_layout.addWidget(self.chat_input)
 
-        # NEW: Live Floating Reaction Toolbar
+        # Live Floating Reaction Toolbar
         self.reaction_toolbar = QHBoxLayout()
         emojis = ["❤️", "😂", "😲", "🔥", "🎉"]
         for e in emojis:
@@ -139,6 +140,10 @@ class VideoPlayer(QMainWindow):
         self.host_update_signal.connect(self.handle_host_update)
         self.host_request_signal.connect(self.handle_host_request_dialog)
         self.reaction_signal.connect(self.handle_incoming_reaction)
+        
+        # Connect the ping signal to the UI updater
+        self.ping_signal.connect(self.update_ping_display) 
+        
         self.connect_to_server()
 
         # Start the Background Ping Tracker (Fires every 2 seconds)
@@ -147,17 +152,14 @@ class VideoPlayer(QMainWindow):
         self.ping_timer.start(2000)
 
     # ================= OS DISTRACTION MONITOR =================
-    # This automatically detects if the user minimizes or clicks away from the app
     def changeEvent(self, event):
         if event.type() == QEvent.ActivationChange:
-            if not self.isActiveWindow(): # App lost focus!
+            if not self.isActiveWindow(): 
                 if self.is_host and self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-                    # Auto-pause to protect the watch party
                     self.play_pause_clicked()
                     sio.emit('chat_event', "⚠️ <b>System Alert:</b> Host tabbed out! Video auto-paused to keep sync.")
                 elif not self.is_host:
-                    # Snitch on the guest!
-                    sio.emit('chat_event', "👀 <b>System Alert:</b> I just tabbed out of the watch party!")
+                    sio.emit('chat_event', "👀 <b>System Alert:</b> Guest tabbed out of the watch party!")
         super().changeEvent(event)
     # ==========================================================
 
@@ -210,9 +212,19 @@ class VideoPlayer(QMainWindow):
         self.last_ping_time = time.time()
         sio.emit('ping_server')
 
+    @Slot(int)
+    def update_ping_display(self, latency):
+        # This safely updates the UI from the main thread!
+        self.ping_label.setText(f"📶 Ping: {latency}ms")
+        if latency < 100:
+            self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: green;")
+        elif latency < 250:
+            self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: orange;")
+        else:
+            self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: red;")
+
     def send_reaction(self, emoji):
         sio.emit('reaction_event', emoji)
-        # Show it on our own screen immediately
         self.trigger_floating_emoji(emoji)
 
     @Slot(dict)
@@ -223,18 +235,15 @@ class VideoPlayer(QMainWindow):
         self.trigger_floating_emoji(emoji)
 
     def trigger_floating_emoji(self, emoji):
-        # Creates a temporary label that physically floats over the video player
         label = QLabel(emoji, self.video_widget)
         label.setStyleSheet("font-size: 48px; background: transparent;")
-        label.setAttribute(Qt.WA_TransparentForMouseEvents) # So it doesn't block mouse clicks
+        label.setAttribute(Qt.WA_TransparentForMouseEvents) 
         label.show()
         
-        # Pick a random starting point at the bottom of the video
         start_x = random.randint(20, max(20, self.video_widget.width() - 80))
         start_y = self.video_widget.height() - 60
         label.move(start_x, start_y)
         
-        # Animate it upwards
         anim = QPropertyAnimation(label, b"pos")
         anim.setEndValue(QPoint(start_x, start_y - 250))
         anim.setDuration(2500)
@@ -242,7 +251,6 @@ class VideoPlayer(QMainWindow):
         anim.finished.connect(label.deleteLater)
         anim.start()
         
-        # Prevent Python from deleting the animation too early
         self.active_animations.append(anim)
         self.active_animations = [a for a in self.active_animations if a.state() == QPropertyAnimation.State.Running]
 
@@ -269,11 +277,9 @@ class VideoPlayer(QMainWindow):
         
         @sio.on('pong_client')
         def on_pong():
+            # Emit the signal to the UI thread instead of touching the label directly
             latency = int((time.time() - self.last_ping_time) * 1000)
-            self.ping_label.setText(f"📶 Ping: {latency}ms")
-            if latency < 100: self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: green;")
-            elif latency < 250: self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: orange;")
-            else: self.ping_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px; color: red;")
+            self.ping_signal.emit(latency)
 
         try: sio.connect(self.server_url) 
         except: self.chat_history.append("<i>⚠️ Could not connect to server.</i>")
