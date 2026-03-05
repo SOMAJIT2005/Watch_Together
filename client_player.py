@@ -39,6 +39,10 @@ class YouTubeExtractor(QThread):
                 'outtmpl': save_path,
                 'quiet': True,
                 'noplaylist': True,
+                # --- NEW: THE 403 FORBIDDEN BYPASS ARMOR ---
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                # -------------------------------------------
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
