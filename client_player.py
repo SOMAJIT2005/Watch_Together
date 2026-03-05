@@ -14,6 +14,7 @@ sio = socketio.Client()
 
 # --- UPGRADED: THE BACKGROUND YOUTUBE CACHE DOWNLOADER ---
 # --- UPGRADED 2.0: THE PYTUBEFIX EXTRACTOR ---
+# --- THE SMART MIRROR ARRAY EXTRACTOR ---
 class YouTubeExtractor(QThread):
     finished_signal = Signal(str, str, str) # title, file_path, original_url
     error_signal = Signal(str)
@@ -23,41 +24,76 @@ class YouTubeExtractor(QThread):
         self.url = url
 
     def run(self):
+        import requests
+        import re
         import os
+        
         try:
-            # ⚡ LAZY LOAD: Import our new smart bypass library
-            from pytubefix import YouTube
+            # 1. Strip the exact 11-character Video ID from the YouTube link
+            match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", self.url)
+            if not match:
+                self.error_signal.emit("Invalid YouTube Link.")
+                return
+            video_id = match.group(1)
+
+            # 2. The Fault-Tolerance Array: If one server is blocked, try the next!
+            mirrors = [
+                "https://invidious.jing.rocks",
+                "https://vid.puffyan.us",
+                "https://invidious.flokinet.to",
+                "https://inv.tux.pizza"
+            ]
             
-            # The Magic Bullet: We explicitly connect using the 'ANDROID' client token to bypass 403s
-            yt = YouTube(self.url, client='ANDROID')
-            
-            # Grab the best standard MP4 stream (Video + Audio combined)
-            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-            
-            if not stream:
-                self.error_signal.emit("No compatible MP4 stream found by PyTubeFix.")
+            best_url = None
+            title = "YouTube Video"
+
+            for mirror in mirrors:
+                try:
+                    # Ask the open-source mirror to bypass YouTube's blocks for us
+                    api_url = f"{mirror}/api/v1/videos/{video_id}"
+                    response = requests.get(api_url, timeout=5)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        title = data.get("title", "YouTube Video")
+                        
+                        # Find a standard MP4 stream in the mirror's response
+                        for stream in data.get("formatStreams", []):
+                            if stream.get("container") == "mp4":
+                                best_url = stream.get("url")
+                                # 720p is the perfect balance for fast downloading
+                                if stream.get("resolution") == "720p":
+                                    break 
+                        
+                        if best_url:
+                            break # Success! Stop checking other mirrors.
+                except:
+                    continue # This mirror is dead/blocked, silently try the next one
+
+            if not best_url:
+                self.error_signal.emit("All mirrors failed. YouTube's defenses are too high today.")
                 return
 
+            # 3. Safely download the video to our local cache
             save_path = os.path.join(os.getcwd(), "youtube_cache.mp4")
-            
-            # Clean up old cache
             if os.path.exists(save_path):
-                try:
-                    os.remove(save_path)
-                except:
-                    pass
-
-            # Download straight to cache
-            stream.download(output_path=os.getcwd(), filename="youtube_cache.mp4")
-            
-            if os.path.exists(save_path):
-                self.finished_signal.emit(yt.title, save_path, self.url)
-            else:
-                self.error_signal.emit("Failed to save video to disk.")
+                os.remove(save_path)
                 
+            # Download it in chunks so we don't crash the RAM
+            with requests.get(best_url, stream=True) as r:
+                r.raise_for_status()
+                with open(save_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024*1024): 
+                        f.write(chunk)
+
+            if os.path.exists(save_path):
+                self.finished_signal.emit(title, save_path, self.url)
+            else:
+                self.error_signal.emit("Failed to save the file to disk.")
+
         except Exception as e:
-            self.error_signal.emit(f"Extraction failed: {str(e)}")
-# ---------------------------------------------------------
+            self.error_signal.emit(f"Smart Bypass Failed: {str(e)}")
+# ----------------------------------------
 
 class VideoPlayer(QMainWindow):
     sync_signal = Signal(dict)
