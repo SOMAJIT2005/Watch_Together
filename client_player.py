@@ -8,7 +8,7 @@ import threading
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
                                QLineEdit, QLabel, QMessageBox, QStackedWidget,
-                               QSlider, QGraphicsOpacityEffect, QProgressBar, QStackedLayout)
+                               QSlider, QGraphicsOpacityEffect, QProgressBar)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect
@@ -75,7 +75,9 @@ class VideoPlayer(QMainWindow):
         self.error_signal.connect(self.handle_connection_error)
 
     def closeEvent(self, event):
-        try: sio.disconnect()
+        try: 
+            sio.disconnect()
+            time.sleep(0.5) 
         except: pass
         os._exit(0) 
 
@@ -110,11 +112,11 @@ class VideoPlayer(QMainWindow):
             avatar_layout.addWidget(btn); self.avatar_buttons.append(btn)
         
         self.name_input = QLineEdit(); self.name_input.setPlaceholderText("Enter Name...")
-        self.name_input.setStyleSheet("font-size: 18px; padding: 15px; background: #222; color: white; border: 1px solid #444;")
+        self.name_input.setStyleSheet("font-size: 18px; padding: 15px; background: #222; color: white; border: 1px solid #444; border-radius: 5px;")
         self.name_input.setFixedWidth(400); self.name_input.returnPressed.connect(self.start_login_process)
         
         go_btn = QPushButton("Enter Cinema"); go_btn.setFixedWidth(400)
-        go_btn.setStyleSheet("font-size: 18px; font-weight: bold; padding: 15px; background: #E50914; color: white;")
+        go_btn.setStyleSheet("font-size: 18px; font-weight: bold; padding: 15px; background: #E50914; color: white; border-radius: 5px;")
         go_btn.clicked.connect(self.start_login_process)
 
         layout.addWidget(title); layout.addLayout(avatar_layout); layout.addWidget(self.name_input); layout.addWidget(go_btn)
@@ -122,8 +124,8 @@ class VideoPlayer(QMainWindow):
 
     def select_avatar(self, choice, btn):
         self.my_avatar = choice
-        for b in self.avatar_buttons: b.setStyleSheet("font-size: 30px; padding: 10px; background: transparent;")
-        btn.setStyleSheet("font-size: 30px; padding: 10px; background: #333; border: 2px solid #E50914;")
+        for b in self.avatar_buttons: b.setStyleSheet("font-size: 30px; padding: 10px; background: transparent; border-radius: 8px;")
+        btn.setStyleSheet("font-size: 30px; padding: 10px; background: #333; border: 2px solid #E50914; border-radius: 8px;")
 
     def build_splash_screen(self):
         self.splash_widget = QWidget()
@@ -192,12 +194,20 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
-        v_cont = QWidget(); v_cont_l = QStackedLayout(v_cont); v_cont_l.setStackingMode(QStackedLayout.StackAll)
-        self.video_widget = QVideoWidget(); self.video_widget.setStyleSheet("background: black;")
-        self.video_overlay = QWidget(); self.video_overlay.setStyleSheet("background: transparent;")
+        # --- THE HARDWARE ACCELERATION OVERLAY FIX ---
+        self.video_widget = QVideoWidget()
+        self.video_widget.setStyleSheet("background: black;")
+        self.media_layout.addWidget(self.video_widget, stretch=1)
+
+        # We create the overlay as a direct child of the cinema window
+        self.video_overlay = QWidget(self.cinema_widget)
+        self.video_overlay.setStyleSheet("background: transparent;")
+        self.video_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        
+        # Install event filters to mathematically lock the overlay to the video boundaries
+        self.video_widget.installEventFilter(self)
         self.video_overlay.installEventFilter(self)
-        v_cont_l.addWidget(self.video_widget); v_cont_l.addWidget(self.video_overlay)
-        self.media_layout.addWidget(v_cont, stretch=1)
+        # ---------------------------------------------
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
         self.media_layout.addWidget(self.slider)
@@ -227,7 +237,7 @@ class VideoPlayer(QMainWindow):
     def setup_network_events(self):
         @sio.on('connect')
         def on_con(): 
-            self.my_sid = sio.get_sid()
+            self.my_sid = sio.sid
             sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color})
             self.connected_signal.emit()
             
@@ -239,6 +249,12 @@ class VideoPlayer(QMainWindow):
         def on_file(d): self.file_signal.emit(d)
         @sio.on('host_update')
         def on_host(d): self.host_update_signal.emit(d)
+        
+        # --- FIXED: ADDED THE MISSING HOST REQUEST LISTENER! ---
+        @sio.on('host_request_received')
+        def on_host_req(d): self.host_request_signal.emit(d)
+        # -------------------------------------------------------
+        
         @sio.on('reaction_event')
         def on_reac(d): self.reaction_signal.emit(d)
         @sio.on('laser_ping')
@@ -261,12 +277,25 @@ class VideoPlayer(QMainWindow):
         except Exception as e:
             self.error_signal.emit(f"⚠️ Connection Failed:\n{str(e)}\n\nCheck Render Start Command!")
 
+    # --- THE OVERLAY SYNC ENGINE ---
     def eventFilter(self, obj, ev):
-        if obj == self.video_overlay and ev.type() == QEvent.MouseButtonPress:
-            x_pct = ev.position().x() / self.video_overlay.width(); y_pct = ev.position().y() / self.video_overlay.height()
+        # 1. Keep the transparent overlay perfectly aligned with the video player
+        if obj == self.video_widget and ev.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+            geom = self.video_widget.geometry()
+            pt = self.video_widget.mapTo(self.cinema_widget, QPoint(0, 0))
+            self.video_overlay.setGeometry(pt.x(), pt.y(), geom.width(), geom.height())
+            self.video_overlay.raise_() # Force it above the graphics card!
+        
+        # 2. Capture clicks on the overlay for the Laser Pointer
+        if obj == self.video_overlay and ev.type() == QEvent.Type.MouseButtonPress:
+            x_pct = ev.position().x() / self.video_overlay.width()
+            y_pct = ev.position().y() / self.video_overlay.height()
             self.draw_laser({'x': x_pct, 'y': y_pct, 'color': self.my_color})
-            sio.emit('laser_ping', {'x': x_pct, 'y': y_pct}); return True
+            sio.emit('laser_ping', {'x': x_pct, 'y': y_pct})
+            return True
+            
         return super().eventFilter(obj, ev)
+    # -------------------------------
 
     @Slot(dict)
     def draw_laser(self, d):
@@ -286,22 +315,42 @@ class VideoPlayer(QMainWindow):
             a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(ex, ey)); a.setDuration(random.randint(1000, 2500)); a.setEasingCurve(QEasingCurve.OutExpo)
             a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
 
+    # --- THE NEW POLISHED UI THEMES ---
     def set_light_theme(self):
-        self.setStyleSheet("background: white; color: black;")
-        self.cinema_widget.setStyleSheet("QPushButton { background: white; color: black; border: 1px solid #ccc; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: white; color: black; }")
-        self.hype_bar.setStyleSheet("QProgressBar { border: 2px solid #ccc; text-align: center; color: black; background: #eee; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
-        self.chat_history.append("<i>☀️ Light Mode On</i>")
+        self.setStyleSheet("background: #f9f9f9; color: #222;")
+        self.cinema_widget.setStyleSheet("""
+            QPushButton { background: #ffffff; color: #333; border: 1px solid #ccc; border-radius: 5px; font-weight: bold; padding: 8px;} 
+            QPushButton:hover { background: #eee; }
+            QLineEdit, QTextEdit { background: #ffffff; color: #111; border: 1px solid #ccc; border-radius: 5px; padding: 5px;}
+        """)
+        # Specific host request button color
+        self.request_host_btn.setStyleSheet("background: #E50914; color: white; border: none; border-radius: 5px; font-weight: bold; padding: 8px;")
+        self.hype_bar.setStyleSheet("QProgressBar { border: 1px solid #ccc; border-radius: 4px; text-align: center; color: #333; background: #fff; font-weight: bold;} QProgressBar::chunk { background: #E50914; border-radius: 3px; }")
+        self.chat_history.append("<i>☀️ Switched to Light Mode</i>")
 
     def set_ambient_theme(self):
         self.setStyleSheet("background: #121212; color: white;")
-        self.cinema_widget.setStyleSheet("QPushButton { background: #222; color: white; border: 1px solid #E50914; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: #1a1a1a; color: white; }")
-        self.hype_bar.setStyleSheet("QProgressBar { border: 2px solid #333; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
-        self.chat_history.append("<i>🌑 Ambient Mode On</i>")
+        self.cinema_widget.setStyleSheet("""
+            QPushButton { background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 5px; font-weight: bold; padding: 8px;} 
+            QPushButton:hover { background: #3a3a3a; border: 1px solid #666;}
+            QLineEdit, QTextEdit { background: #1a1a1a; color: white; border: 1px solid #333; border-radius: 5px; padding: 5px;}
+        """)
+        # Specific host request button color
+        self.request_host_btn.setStyleSheet("background: #E50914; color: white; border: none; border-radius: 5px; font-weight: bold; padding: 8px;")
+        self.hype_bar.setStyleSheet("QProgressBar { border: 1px solid #444; border-radius: 4px; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: #E50914; border-radius: 3px; }")
+        self.chat_history.append("<i>🌑 Switched to Ambient Mode</i>")
+    # ----------------------------------
 
     def toggle_fullscreen(self):
-        if self.isFullScreen(): self.showNormal(); self.social_panel_visible(True)
-        else: self.showFullScreen(); self.social_panel_visible(False)
+        if self.isFullScreen(): 
+            self.showNormal(); self.social_panel_visible(True)
+        else: 
+            self.showFullScreen(); self.social_panel_visible(False)
+        # Force a geometry update for the overlay when swapping modes
+        QTimer.singleShot(100, lambda: self.video_overlay.setGeometry(self.video_widget.mapTo(self.cinema_widget, QPoint(0, 0)).x(), self.video_widget.mapTo(self.cinema_widget, QPoint(0, 0)).y(), self.video_widget.geometry().width(), self.video_widget.geometry().height()))
+
     def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
+    
     def keyPressEvent(self, ev):
         if ev.key() == Qt.Key_Escape and self.isFullScreen(): self.toggle_fullscreen()
         super().keyPressEvent(ev)
@@ -320,7 +369,7 @@ class VideoPlayer(QMainWindow):
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
-    def update_ping(self, l): self.ping_label.setText(f"📶 Ping: {l}ms"); self.ping_label.setStyleSheet(f"color: {'green' if l<150 else 'red'}; font-weight: bold;")
+    def update_ping(self, l): self.ping_label.setText(f"📶 Ping: {l}ms"); self.ping_label.setStyleSheet(f"color: {'#00ff00' if l<150 else '#ff3333'}; font-weight: bold;")
     
     def send_chat_message(self):
         t = self.chat_input.text()
@@ -343,24 +392,30 @@ class VideoPlayer(QMainWindow):
         if d['action'] == 'pause': self.media_player.pause()
         elif d['action'] == 'play': self.media_player.play()
     def handle_file(self, d): self.friend_filename = d['filename']; self.chat_history.append(f"⚠️ Friend loaded: {d['filename']}")
-    # --- 100% BULLETPROOF HOST DETECTION ---
+    
     def handle_host(self, d):
-        # We check the network ID, but if the thread is too slow, we fall back to an exact Name Match!
         self.is_host = (d['host_sid'] == self.my_sid) or (d['host_name'] == self.username)
+        self.host_status_label.setText(f"👑 Host: {'You (' + d['host_name'] + ')' if self.is_host else d['host_name']}")
+        self.play_btn.setEnabled(self.is_host); self.slider.setEnabled(self.is_host); self.request_host_btn.setVisible(not self.is_host)
         
-        if self.is_host:
-            self.host_status_label.setText(f"👑 Host: You ({d['host_name']})")
-        else:
-            self.host_status_label.setText(f"👑 Host: {d['host_name']}")
-            
-        self.play_btn.setEnabled(self.is_host)
-        self.slider.setEnabled(self.is_host)
-        self.request_host_btn.setVisible(not self.is_host)
-    # ---------------------------------------
-    def request_host_clicked(self): sio.emit('request_host'); self.chat_history.append("<i>🙋 Requesting...</i>")
+    def request_host_clicked(self): 
+        sio.emit('request_host')
+        self.chat_history.append("<i>🙋 Request sent to the current host...</i>")
+        
     def handle_host_dialog(self, d):
-        box = QMessageBox(self); box.setText(f"{d['requester_name']} wants Host. Grant?"); yes = box.addButton("Grant", QMessageBox.AcceptRole); box.addButton("Deny", QMessageBox.RejectRole); box.exec()
+        box = QMessageBox(self)
+        box.setWindowTitle("Host Request")
+        box.setText(f"{d['requester_name']} wants to be the Host. Grant control?")
+        yes = box.addButton("Grant Control", QMessageBox.AcceptRole)
+        box.addButton("Deny", QMessageBox.RejectRole)
+        # Apply current theme to popup
+        if self.palette().window().color().name() == "#ffffff":
+            box.setStyleSheet("background: white; color: black;")
+        else:
+            box.setStyleSheet("background: #1a1a1a; color: white;")
+        box.exec()
         if box.clickedButton() == yes: sio.emit('grant_host', {'new_host_sid': d['requester_sid']})
+        
     def set_position(self, p):
         if self.is_host: self.media_player.setPosition(p); sio.emit('sync_event', {'action': 'seek', 'time': p})
 
