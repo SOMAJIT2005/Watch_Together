@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
                                QGraphicsView, QGraphicsScene)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
-from PySide6.QtGui import QColor, QPen, QBrush, QFont # NEW: Native Graphics Drawing Tools
+from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
+from PySide6.QtGui import QColor, QPen, QBrush, QFont 
 
 sio = socketio.Client()
 
@@ -196,23 +196,19 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
-        # 1. Create a Graphics View (The Canvas)
         self.video_view = QGraphicsView()
         self.video_view.setStyleSheet("background: black; border: none;")
         self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        # 2. Create the Scene (The World)
         self.video_scene = QGraphicsScene()
         self.video_view.setScene(self.video_scene)
         
-        # 3. Add the Video to the Scene
         self.video_item = QGraphicsVideoItem()
         self.video_scene.addItem(self.video_item)
         
         self.media_layout.addWidget(self.video_view, stretch=1)
         
-        # Track resizing and mouse clicks directly on the canvas viewport
         self.video_view.installEventFilter(self)
         self.video_view.viewport().installEventFilter(self)
 
@@ -300,12 +296,10 @@ class VideoPlayer(QMainWindow):
             
         return super().eventFilter(obj, ev)
 
-    # ================== THE NATIVE GRAPHICS ANIMATIONS ==================
     @Slot(dict)
     def draw_laser(self, d):
         tx, ty = int(d['x'] * self.video_view.width()), int(d['y'] * self.video_view.height())
         
-        # Native Ellipse (No HTML/CSS labels to cause black squares!)
         ellipse = self.video_scene.addEllipse(0, 0, 0, 0, QPen(QColor(255, 0, 0), 4), QBrush(Qt.transparent))
         
         anim = QVariantAnimation(self)
@@ -315,7 +309,6 @@ class VideoPlayer(QMainWindow):
         anim.setEasingCurve(QEasingCurve.OutQuad)
         
         def update_droplet(val):
-            # Math for the "Ripple/Droplet" effect: Expands from 10 to 100 pixels, fades out!
             size = 10 + (90 * val)
             ellipse.setRect(tx - size/2, ty - size/2, size, size)
             ellipse.setOpacity(1.0 - val) 
@@ -361,14 +354,13 @@ class VideoPlayer(QMainWindow):
         anim.setEndValue(1.0)
         
         def update_emoji(val):
-            txt.setPos(sx, sy - (250 * val)) # Float upwards
-            if val > 0.7: txt.setOpacity((1.0 - val) * 3.3) # Fade out near top
+            txt.setPos(sx, sy - (250 * val)) 
+            if val > 0.7: txt.setOpacity((1.0 - val) * 3.3) 
             
         anim.valueChanged.connect(update_emoji)
         anim.finished.connect(lambda: self.video_scene.removeItem(txt))
         anim.start()
         self.active_animations.append(anim)
-    # ====================================================================
 
     def set_light_theme(self):
         self.setStyleSheet("background: #f9f9f9; color: #222;")
