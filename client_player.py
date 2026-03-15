@@ -3,7 +3,7 @@ import os
 import time
 import random
 import socketio
-import threading # THIS is what prevents the app from freezing!
+import threading 
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
@@ -27,14 +27,12 @@ class VideoPlayer(QMainWindow):
     laser_signal = Signal(dict)
     hype_signal = Signal(int)
     confetti_signal = Signal()
-    error_signal = Signal(str) # Safely sends errors from the background thread to the UI
+    error_signal = Signal(str) 
 
     def __init__(self):
         super().__init__()
         
-        # 🔴 VERIFY THIS URL MATCHES YOUR RENDER DASHBOARD EXACTLY!
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
-        
         self.username = "Guest"
         self.my_avatar = "👤"
         self.my_color = random.choice(["#FF3366", "#33CCFF", "#00FF99", "#FF9900", "#CC33FF", "#FFFF33"])
@@ -72,14 +70,15 @@ class VideoPlayer(QMainWindow):
         self.curtain_effect.setOpacity(0.0)
         self.curtain.hide()
 
-        # Thread-safe signal connections
+        # Wire up the thread-safe signals
+        self.setup_network_events()
         self.connected_signal.connect(self.transition_to_cinema)
         self.error_signal.connect(self.handle_connection_error)
 
     def closeEvent(self, event):
         try: sio.disconnect()
         except: pass
-        os._exit(0) # Ghost Host Kill Switch
+        os._exit(0) 
 
     def resizeEvent(self, event):
         self.curtain.resize(self.size())
@@ -150,17 +149,12 @@ class VideoPlayer(QMainWindow):
         self.welcome_label.setText(f"Welcome to the Cinema, {self.username}.")
         self.animate_stack_transition(1, callback=self.initiate_network)
 
-    # ================= THE MULTITHREADING FIX =================
     def initiate_network(self):
-        self.p_timer.start(250) # Start the panda animation
-        
-        # Start the 4-second delay warning timer
+        self.p_timer.start(250) 
         self.server_wait_timer = QTimer(self)
         self.server_wait_timer.setSingleShot(True)
         self.server_wait_timer.timeout.connect(self.show_render_warning)
         self.server_wait_timer.start(4000) 
-
-        # Fire the heavy internet connection into a background thread so the UI never freezes!
         threading.Thread(target=self.connect_to_server, daemon=True).start()
 
     def show_render_warning(self):
@@ -169,11 +163,10 @@ class VideoPlayer(QMainWindow):
 
     @Slot(str)
     def handle_connection_error(self, msg):
-        self.p_timer.stop() # Stop the panda
+        self.p_timer.stop() 
         if hasattr(self, 'server_wait_timer'): self.server_wait_timer.stop()
         self.loading_label.setText(msg)
-        self.loading_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ff3333; margin-top: 10px;")
-    # ==========================================================
+        self.loading_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff3333; margin-top: 10px;")
 
     @Slot()
     def transition_to_cinema(self):
@@ -232,10 +225,45 @@ class VideoPlayer(QMainWindow):
         self.player.setVideoOutput(self.video_widget); self.player.setAudioOutput(self.audio)
         self.player.positionChanged.connect(lambda p: self.slider.setValue(p)); self.player.durationChanged.connect(lambda d: self.slider.setRange(0, d))
 
+    def setup_network_events(self):
+        # We register these ONCE during bootup, not inside the connection loop
+        @sio.on('connect')
+        def on_con(): 
+            sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color})
+            self.connected_signal.emit()
+            
+        @sio.on('sync_event')
+        def on_sync(d): self.sync_signal.emit(d)
+        @sio.on('chat_event')
+        def on_chat(d): self.chat_signal.emit(d)
+        @sio.on('file_info')
+        def on_file(d): self.file_signal.emit(d)
+        @sio.on('host_update')
+        def on_host(d): self.host_update_signal.emit(d)
+        @sio.on('reaction_event')
+        def on_reac(d): self.reaction_signal.emit(d)
+        @sio.on('laser_ping')
+        def on_laser(d): self.laser_signal.emit(d)
+        @sio.on('hype_update')
+        def on_hype(d): self.hype_signal.emit(d)
+        @sio.on('confetti_event')
+        def on_conf(): self.confetti_signal.emit()
+        @sio.on('pong_client')
+        def on_pong(): self.ping_signal.emit(int((time.time() - self.last_ping_time) * 1000))
+
+        # Wire up internal signals to UI functions
         self.sync_signal.connect(self.handle_sync); self.chat_signal.connect(self.handle_chat); self.file_signal.connect(self.handle_file)
         self.host_update_signal.connect(self.handle_host); self.host_request_signal.connect(self.handle_host_dialog)
         self.reaction_signal.connect(self.handle_reac); self.ping_signal.connect(self.update_ping) 
         self.laser_signal.connect(self.draw_laser); self.hype_signal.connect(lambda v: self.hype.setValue(v)); self.confetti_signal.connect(self.trigger_confetti)
+
+    def connect_to_server(self):
+        try: 
+            # Force a strict 15-second timeout so it never hangs forever
+            sio.connect(self.server_url, wait_timeout=15)
+        except Exception as e:
+            # If it fails, print the exact Python error on the screen!
+            self.error_signal.emit(f"⚠️ Connection Failed:\n{str(e)}\n\nCheck Render Start Command!")
 
     def eventFilter(self, obj, ev):
         if obj == self.video_overlay and ev.type() == QEvent.MouseButtonPress:
@@ -293,34 +321,6 @@ class VideoPlayer(QMainWindow):
         act = 'pause' if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState else 'play'
         sio.emit('sync_event', {'action': act, 'time': self.player.position()})
         self.player.pause() if act == 'pause' else self.player.play()
-
-    def connect_to_server(self):
-        @sio.on('connect')
-        def on_con(): sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color}); self.connected_signal.emit()
-        @sio.on('sync_event')
-        def on_sync(d): self.sync_signal.emit(d)
-        @sio.on('chat_event')
-        def on_chat(d): self.chat_signal.emit(d)
-        @sio.on('file_info')
-        def on_file(d): self.file_signal.emit(d)
-        @sio.on('host_update')
-        def on_host(d): self.host_update_signal.emit(d)
-        @sio.on('reaction_event')
-        def on_reac(d): self.reaction_signal.emit(d)
-        @sio.on('laser_ping')
-        def on_laser(d): self.laser_signal.emit(d)
-        @sio.on('hype_update')
-        def on_hype(d): self.hype_signal.emit(d)
-        @sio.on('confetti_event')
-        def on_conf(): self.confetti_signal.emit()
-        @sio.on('pong_client')
-        def on_pong(): self.ping_signal.emit(int((time.time() - self.last_ping_time) * 1000))
-        
-        try: 
-            sio.connect(self.server_url)
-        except Exception as e:
-            # Safely send the crash alert back to the UI thread!
-            self.error_signal.emit("⚠️ Server Offline or URL Incorrect. Check Render!")
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
