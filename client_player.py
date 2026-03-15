@@ -1,15 +1,9 @@
-import sys
-import os
-import time
-import random
-import socketio
-import threading 
-
+import sys, os, time, random, socketio, threading 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
                                QLineEdit, QLabel, QMessageBox, QStackedWidget,
                                QSlider, QGraphicsOpacityEffect, QProgressBar, 
-                               QGraphicsView, QGraphicsScene)
+                               QGraphicsView, QGraphicsScene, QInputDialog)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
@@ -18,105 +12,91 @@ from PySide6.QtGui import QColor, QPen, QBrush, QFont, QIcon
 sio = socketio.Client()
 
 class VideoPlayer(QMainWindow):
-    sync_signal = Signal(dict)
-    chat_signal = Signal(dict)  
-    file_signal = Signal(dict)
-    host_update_signal = Signal(dict)
-    host_request_signal = Signal(dict)
-    reaction_signal = Signal(dict)
-    ping_signal = Signal(int) 
-    connected_signal = Signal() 
-    laser_signal = Signal(dict)
-    hype_signal = Signal(int)
-    confetti_signal = Signal()
-    error_signal = Signal(str) 
+    sync_signal = Signal(dict); chat_signal = Signal(dict); file_signal = Signal(dict)
+    host_update_signal = Signal(dict); host_request_signal = Signal(dict)
+    reaction_signal = Signal(dict); ping_signal = Signal(int); connected_signal = Signal() 
+    laser_signal = Signal(dict); hype_signal = Signal(int); confetti_signal = Signal()
+    error_signal = Signal(str); auth_signal = Signal(str)
 
     def __init__(self):
         super().__init__()
-        
         self.setFocusPolicy(Qt.StrongFocus) 
-        
-        # --- LICENSE & SECURITY SETUP ---
-        self.MASTER_PIN = "WATCH-2100" 
-        self.license_path = os.path.join(os.environ.get('APPDATA', os.path.expanduser("~")), "watch_together_v1.lic")
-        # --------------------------------
-        
+        self.license_path = os.path.join(os.environ.get('APPDATA', os.path.expanduser("~")), "wt_cloud.lic")
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
-        self.username = "Guest"
-        self.my_avatar = "👤"
-        self.my_color = random.choice(["#FF3366", "#33CCFF", "#00FF99", "#FF9900", "#CC33FF", "#FFFF33"])
+        self.username = "Guest"; self.my_avatar = "👤"; self.my_color = random.choice(["#FF3366", "#33CCFF", "#00FF99", "#FF9900", "#CC33FF", "#FFFF33"])
         
         self.setWindowTitle("Watch Together | CSE 2100 Project")
-        
-        def resource_path(relative_path):
-            try: base_path = sys._MEIPASS
-            except Exception: base_path = os.path.abspath(".")
-            return os.path.join(base_path, relative_path)
-            
+        def resource_path(rel):
+            try: b = sys._MEIPASS
+            except: b = os.path.abspath(".")
+            return os.path.join(b, rel)
         self.setWindowIcon(QIcon(resource_path("icon.ico")))
-        self.resize(1100, 650) 
-        self.setStyleSheet("QMainWindow { background-color: #121212; } QWidget { color: white; }") 
+        self.resize(1100, 650); self.setStyleSheet("QMainWindow { background-color: #121212; } QWidget { color: white; }") 
 
-        self.my_filename = None       
-        self.friend_filename = None   
-        self.is_host = False
-        self.my_sid = None
-        self.active_animations = [] 
-        self.last_ping_time = 0
+        self.is_host = False; self.my_sid = None; self.last_ping_time = 0; self.active_animations = []
+        self.my_filename = None; self.friend_filename = None
+        
+        self.central_widget = QWidget(); self.setCentralWidget(self.central_widget)
+        self.main_layout = QVBoxLayout(self.central_widget); self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.app_stack = QStackedWidget(); self.main_layout.addWidget(self.app_stack)
 
-        self.central_widget = QWidget()
-        self.central_widget.setStyleSheet("background-color: #121212;")
-        self.setCentralWidget(self.central_widget)
-        self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.build_auth_screen(); self.build_login_screen(); self.build_splash_screen(); self.build_main_cinema()
 
-        self.app_stack = QStackedWidget()
-        self.main_layout.addWidget(self.app_stack)
+        if os.path.exists(self.license_path): self.app_stack.setCurrentIndex(1)
+        else: self.app_stack.setCurrentIndex(0)
 
-        self.build_auth_screen()
-        self.build_login_screen()
-        self.build_splash_screen()
-        self.build_main_cinema()
-
-        if os.path.exists(self.license_path):
-            self.app_stack.setCurrentIndex(1)
-        else:
-            self.app_stack.setCurrentIndex(0)
-
-        self.curtain = QWidget(self)
-        self.curtain.setStyleSheet("background-color: #121212;") 
-        self.curtain.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.curtain_effect = QGraphicsOpacityEffect(self.curtain)
-        self.curtain.setGraphicsEffect(self.curtain_effect)
-        self.curtain_effect.setOpacity(0.0)
-        self.curtain.hide()
+        self.curtain = QWidget(self); self.curtain.setStyleSheet("background-color: #121212;"); self.curtain.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.curtain_effect = QGraphicsOpacityEffect(self.curtain); self.curtain.setGraphicsEffect(self.curtain_effect); self.curtain_effect.setOpacity(0.0); self.curtain.hide()
 
         self.setup_network_events()
         self.connected_signal.connect(self.transition_to_cinema)
-        self.error_signal.connect(self.handle_connection_error)
+        self.error_signal.connect(lambda m: QMessageBox.critical(self, "Error", m))
 
     def build_auth_screen(self):
         self.auth_widget = QWidget(); layout = QVBoxLayout(self.auth_widget); layout.setAlignment(Qt.AlignCenter)
-        title = QLabel("🔐 Application Locked"); title.setStyleSheet("font-size: 32px; font-weight: bold; color: #E50914;")
-        desc = QLabel("Please request a PIN from the Developer to access this software:\n<b>somajitdeb2005@gmail.com</b>")
-        desc.setAlignment(Qt.AlignCenter); desc.setStyleSheet("font-size: 14px; color: #aaa; margin: 30px;")
-        self.pin_input = QLineEdit(); self.pin_input.setPlaceholderText("Enter Secret PIN..."); self.pin_input.setEchoMode(QLineEdit.Password)
-        self.pin_input.setFixedWidth(300); self.pin_input.setStyleSheet("font-size: 18px; padding: 12px; background: #222; border: 1px solid #444; border-radius: 5px; color: white;")
-        unlock_btn = QPushButton("Verify & Unlock"); unlock_btn.setFixedWidth(300); unlock_btn.setStyleSheet("background: #E50914; font-weight: bold; font-size: 16px; padding: 12px; border-radius: 5px; margin-top: 10px;")
-        unlock_btn.clicked.connect(self.verify_pin); self.pin_input.returnPressed.connect(self.verify_pin)
-        layout.addWidget(title); layout.addWidget(desc); layout.addWidget(self.pin_input); layout.addWidget(unlock_btn)
+        t = QLabel("🔐 Cloud Security"); t.setStyleSheet("font-size: 32px; font-weight: bold; color: #E50914;")
+        d = QLabel("This application is private. Request a PIN to your email to unlock."); d.setStyleSheet("color: #aaa; margin: 20px;")
+        
+        self.req_btn = QPushButton("Request PIN via Cloud Server"); self.req_btn.setFixedWidth(300); self.req_btn.setStyleSheet("background: #444; padding: 12px; font-weight: bold;")
+        self.pin_in = QLineEdit(); self.pin_in.setPlaceholderText("Enter 6-digit PIN..."); self.pin_in.setFixedWidth(300); self.pin_in.setEchoMode(QLineEdit.Password)
+        self.pin_in.setStyleSheet("font-size: 18px; padding: 12px; background: #222; border: 1px solid #444; border-radius: 5px; color: white;")
+        self.v_btn = QPushButton("Verify PIN"); self.v_btn.setFixedWidth(300); self.v_btn.setStyleSheet("background: #E50914; padding: 12px; font-weight: bold;")
+        
+        self.req_btn.clicked.connect(self.cloud_request_clicked)
+        self.v_btn.clicked.connect(self.cloud_verify_clicked)
+        self.pin_in.returnPressed.connect(self.cloud_verify_clicked)
+        
+        layout.addWidget(t); layout.addWidget(d); layout.addWidget(self.req_btn); layout.addWidget(self.pin_in); layout.addWidget(self.v_btn)
         self.app_stack.addWidget(self.auth_widget)
 
-    def verify_pin(self):
-        if self.pin_input.text() == self.MASTER_PIN:
-            with open(self.license_path, "w") as f: f.write("LICENSED")
-            self.animate_stack_transition(1) 
-        else: QMessageBox.critical(self, "Invalid PIN", "Access denied.")
+    def cloud_request_clicked(self):
+        name, ok = QInputDialog.getText(self, "Identify", "Enter your name for the PIN request:")
+        if ok and name:
+            if not sio.connected: 
+                threading.Thread(target=lambda: sio.connect(self.server_url, wait_timeout=10), daemon=True).start()
+                QTimer.singleShot(2500, lambda: sio.emit('request_cloud_pin', {'name': name}))
+            else: sio.emit('request_cloud_pin', {'name': name})
+
+    def cloud_verify_clicked(self):
+        if not self.pin_in.text(): return
+        sio.emit('verify_cloud_pin', {'pin': self.pin_in.text()})
+
+    def handle_auth_result(self, res):
+        if res == "SUCCESS":
+            try:
+                with open(self.license_path, "w") as f: f.write("VERIFIED")
+            except: pass
+            self.animate_stack_transition(1)
+        elif res == "FAILED": QMessageBox.warning(self, "Denied", "Incorrect PIN.")
+        else: QMessageBox.information(self, "Sent", res)
 
     def closeEvent(self, event):
         try: sio.disconnect(); time.sleep(0.5)
         except: pass
         os._exit(0) 
+
+    def resizeEvent(self, event):
+        self.curtain.resize(self.size()); super().resizeEvent(event)
 
     def animate_stack_transition(self, new_index, callback=None):
         self.curtain.show(); self.curtain.raise_() 
@@ -144,7 +124,7 @@ class VideoPlayer(QMainWindow):
 
     def select_avatar(self, choice, btn):
         self.my_avatar = choice
-        for b in self.avatar_buttons: b.setStyleSheet("font-size: 30px; padding: 10px; background: transparent;")
+        for b in self.avatar_buttons: b.setStyleSheet("font-size: 30px; padding: 10px; background: transparent; border-radius: 8px;")
         btn.setStyleSheet("font-size: 30px; padding: 10px; background: #333; border: 2px solid #E50914; border-radius: 8px;")
 
     def build_splash_screen(self):
@@ -163,18 +143,18 @@ class VideoPlayer(QMainWindow):
         self.animate_stack_transition(2, callback=self.initiate_network)
 
     def initiate_network(self):
-        self.p_timer.start(250) 
-        self.server_wait_timer = QTimer(self); self.server_wait_timer.setSingleShot(True)
-        self.server_wait_timer.timeout.connect(lambda: self.loading_label.setText("Waking up Cloud Server...\n(Free tier takes ~50s. Please wait!)")); self.server_wait_timer.start(4000) 
-        threading.Thread(target=self.connect_to_server, daemon=True).start()
-
-    @Slot(str)
-    def handle_connection_error(self, msg):
-        self.p_timer.stop(); self.loading_label.setText(msg); self.loading_label.setStyleSheet("font-size: 16px; color: #ff3333;")
+        if not sio.connected:
+            self.p_timer.start(250) 
+            self.server_wait_timer = QTimer(self); self.server_wait_timer.setSingleShot(True)
+            self.server_wait_timer.timeout.connect(lambda: self.loading_label.setText("Waking up Cloud Server...\n(Free tier takes ~50s. Please wait!)")); self.server_wait_timer.start(4000) 
+            threading.Thread(target=self.connect_to_server, daemon=True).start()
+        else:
+            self.transition_to_cinema()
 
     @Slot()
     def transition_to_cinema(self):
         self.p_timer.stop(); self.set_ambient_theme()
+        if hasattr(self, 'server_wait_timer'): self.server_wait_timer.stop()
         self.animate_stack_transition(3, callback=lambda: QTimer.singleShot(100, self.start_ping_tracker))
 
     def build_main_cinema(self):
@@ -183,33 +163,53 @@ class VideoPlayer(QMainWindow):
         self.light_mode_btn = QPushButton("☀️ Light Mode"); self.light_mode_btn.clicked.connect(self.set_light_theme); self.light_mode_btn.setFocusPolicy(Qt.NoFocus) 
         self.ambient_mode_btn = QPushButton("🌑 Ambient Mode"); self.ambient_mode_btn.clicked.connect(self.set_ambient_theme); self.ambient_mode_btn.setFocusPolicy(Qt.NoFocus) 
         t_bar.addStretch(); t_bar.addWidget(self.light_mode_btn); t_bar.addWidget(self.ambient_mode_btn); self.media_layout.addLayout(t_bar)
+        
         top = QHBoxLayout()
         self.host_status_label = QLabel("👑 Host: Connecting..."); self.ping_label = QLabel("📶 Ping: -- ms")
         self.request_host_btn = QPushButton("🙋 Request Host"); self.request_host_btn.clicked.connect(self.request_host_clicked); self.request_host_btn.hide(); self.request_host_btn.setFocusPolicy(Qt.NoFocus) 
         self.fullscreen_btn = QPushButton("⛶ Fullscreen"); self.fullscreen_btn.clicked.connect(self.toggle_fullscreen); self.fullscreen_btn.setFocusPolicy(Qt.NoFocus) 
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn); self.media_layout.addLayout(top)
+        
         self.video_view = QGraphicsView(); self.video_view.setStyleSheet("background: black; border: none;"); self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.video_view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate); self.video_view.setFocusPolicy(Qt.NoFocus) 
         self.video_scene = QGraphicsScene(); self.video_view.setScene(self.video_scene); self.video_item = QGraphicsVideoItem(); self.video_scene.addItem(self.video_item); self.media_layout.addWidget(self.video_view, stretch=1)
         self.video_view.installEventFilter(self); self.video_view.viewport().installEventFilter(self)
+        
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False); self.slider.setFocusPolicy(Qt.NoFocus); self.media_layout.addWidget(self.slider)
+        
         ctrl = QHBoxLayout()
         self.open_btn = QPushButton("📁 Open Movie File"); self.open_btn.clicked.connect(self.open_file); self.open_btn.setFocusPolicy(Qt.NoFocus) 
         self.play_btn = QPushButton("⏯️ Play / Pause"); self.play_btn.clicked.connect(self.play_pause_clicked); self.play_btn.setEnabled(False); self.play_btn.setFocusPolicy(Qt.NoFocus) 
         ctrl.addWidget(self.open_btn); ctrl.addWidget(self.play_btn); self.media_layout.addLayout(ctrl); l.addLayout(self.media_layout, stretch=3)
+        
         soc = QVBoxLayout()
         self.hype_bar = QProgressBar(); self.hype_bar.setFormat("🔥 GLOBAL HYPE: %p%")
         self.chat_history = QTextEdit(); self.chat_history.setReadOnly(True)
         self.chat_input = QLineEdit(); self.chat_input.setPlaceholderText("Chat..."); self.chat_input.returnPressed.connect(self.send_chat_message)
         reac_widget = QWidget(); reac = QHBoxLayout(reac_widget); reac.setContentsMargins(0, 0, 0, 0)
         for e in ["❤️", "😂", "😲", "🔥", "🎉", "👍", "👎", "😭", "🍿", "👀"]:
-            b = QPushButton(e); b.clicked.connect(lambda chk, emoji=e: self.send_reaction(emoji)); b.setFocusPolicy(Qt.NoFocus); reac.addWidget(b)
+            b = QPushButton(e); b.clicked.connect(lambda chk, emoji=e: self.send_reaction(emoji)); b.setCursor(Qt.PointingHandCursor); b.setFocusPolicy(Qt.NoFocus); reac.addWidget(b)
         soc.addWidget(self.hype_bar); soc.addWidget(self.chat_history); soc.addWidget(self.chat_input); soc.addWidget(reac_widget); l.addLayout(soc, stretch=1); self.app_stack.addWidget(self.cinema_widget)
+        
         self.media_player = QMediaPlayer(); self.audio_output = QAudioOutput(); self.media_player.setVideoOutput(self.video_item); self.media_player.setAudioOutput(self.audio_output)
         self.media_player.positionChanged.connect(lambda p: self.slider.setValue(p)); self.media_player.durationChanged.connect(lambda d: self.slider.setRange(0, d))
 
     def setup_network_events(self):
         @sio.on('connect')
-        def on_con(): self.my_sid = sio.sid; sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color}); self.connected_signal.emit()
+        def on_con(): 
+            self.my_sid = sio.sid
+            if self.app_stack.currentIndex() != 0: # If not on auth screen
+                sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color})
+                self.connected_signal.emit()
+                
+        @sio.on('pin_request_sent')
+        def on_ps(): self.auth_signal.emit("PIN request sent! Check with somajitdeb2005@gmail.com.")
+        @sio.on('auth_success')
+        def on_as(): self.auth_signal.emit("SUCCESS")
+        @sio.on('auth_failed')
+        def on_af(): self.auth_signal.emit("FAILED")
+        @sio.on('auth_error')
+        def on_ae(d): self.auth_signal.emit(d['msg'])
+
         @sio.on('sync_event')
         def on_sync(d): self.sync_signal.emit(d)
         @sio.on('chat_event')
@@ -230,6 +230,8 @@ class VideoPlayer(QMainWindow):
         def on_conf(): self.confetti_signal.emit()
         @sio.on('pong_client')
         def on_pong(): self.ping_signal.emit(int((time.time() - self.last_ping_time) * 1000))
+
+        self.auth_signal.connect(self.handle_auth_result)
         self.sync_signal.connect(self.handle_sync); self.chat_signal.connect(self.handle_chat); self.file_signal.connect(self.handle_file)
         self.host_update_signal.connect(self.handle_host); self.host_request_signal.connect(self.handle_host_dialog)
         self.reaction_signal.connect(self.handle_reac); self.ping_signal.connect(self.update_ping) 
@@ -250,7 +252,8 @@ class VideoPlayer(QMainWindow):
     @Slot(dict)
     def draw_laser(self, d):
         tx, ty = int(d['x'] * self.video_view.width()), int(d['y'] * self.video_view.height())
-        ellipse = self.video_scene.addEllipse(0, 0, 0, 0, QPen(QColor(255, 0, 0), 4), QBrush(Qt.transparent))
+        c = QColor(d.get('color', '#FF0000'))
+        ellipse = self.video_scene.addEllipse(0, 0, 0, 0, QPen(c, 4), QBrush(Qt.transparent))
         anim = QVariantAnimation(self); anim.setDuration(1000); anim.setStartValue(0.0); anim.setEndValue(1.0); anim.setEasingCurve(QEasingCurve.OutQuad)
         anim.valueChanged.connect(lambda val: (size := 10 + (90 * val), ellipse.setRect(tx - size/2, ty - size/2, size, size), ellipse.setOpacity(1.0 - val)))
         anim.finished.connect(lambda: self.video_scene.removeItem(ellipse)); anim.start(); self.active_animations.append(anim)
@@ -302,13 +305,10 @@ class VideoPlayer(QMainWindow):
         new_pos = max(0, min(self.media_player.position() + (step if forward else -step), d))
         self.set_position(new_pos); self.chat_history.append(f"<i style='color: gray;'>Skipped {step//1000}s {'forward' if forward else 'backward'}...</i>")
 
-    # --- UPDATED: MULTI-FORMAT SUPPORT ---
     def open_file(self):
-        # Recognizes .mp4, .mkv, .avi, .mov, .wmv, and .flv
         if path := QFileDialog.getOpenFileName(self, "Open Movie", "", "Video Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv);;All Files (*)")[0]:
             self.my_filename = os.path.basename(path); self.media_player.setSource(QUrl.fromLocalFile(path)); self.media_player.pause()
             sio.emit('file_info', {'filename': self.my_filename}); self.setFocus()
-    # -------------------------------------
 
     def play_pause_clicked(self):
         if not self.is_host or (self.friend_filename and self.my_filename != self.friend_filename): return
