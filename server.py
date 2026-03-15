@@ -1,58 +1,32 @@
 import os
 import random
-import smtplib
-from email.message import EmailMessage
 from flask import Flask, request
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# --- SECURITY CONFIGURATION ---
-MY_EMAIL = "somajitdeb2005@gmail.com" 
-SMTP_USER = os.environ.get("SMTP_EMAIL") 
-SMTP_PASS = os.environ.get("SMTP_PASSWORD") 
-
+# State Management
 unverified_requests = {}
 users = {}
 current_host_sid = None
 current_host_name = None
 global_hype = 0
 
-def send_auth_email(target_name, pin):
-    print(f"📧 Attempting to send email to {MY_EMAIL} via Port 587...", flush=True) 
-    msg = EmailMessage()
-    msg.set_content(f"Watch Together Security Alert\n\nUser '{target_name}' is requesting access to your private server.\nProvide them this 6-digit PIN: {pin}")
-    msg['Subject'] = f"🔑 Access Request: {target_name}"
-    msg['From'] = SMTP_USER
-    msg['To'] = MY_EMAIL
-    
-    try:
-        # NEW: Using Port 587, explicit TLS, and a 10-second timeout safeguard
-        with smtplib.SMTP('smtp.gmail.com', 587, timeout=10) as smtp:
-            smtp.ehlo()
-            smtp.starttls() # This securely encrypts the connection
-            smtp.login(SMTP_USER, SMTP_PASS)
-            smtp.send_message(msg)
-            
-        print("✅ Email sent successfully!", flush=True) 
-        return True
-    except Exception as e:
-        print(f"❌ SMTP Error: {e}", flush=True) 
-        return False
-
+# --- 1. CLOUD PIN SECURITY (ADMIN CONSOLE MODE) ---
 @socketio.on('request_cloud_pin')
 def handle_pin_request(data):
     name = data.get('name', 'Anonymous')
-    print(f"🚨 RECEIVED PIN REQUEST FROM: {name}", flush=True) # FORCED LOG
-    
     pin = str(random.randint(100000, 999999))
     unverified_requests[request.sid] = pin
     
-    if send_auth_email(name, pin):
-        emit('pin_request_sent')
-    else:
-        emit('auth_error', {'msg': 'Cloud Email System Offline. Check Render Logs.'})
+    # --- THIS PRINTS MASSIVELY IN YOUR RENDER LOGS ---
+    print("\n" + "🔥"*25, flush=True)
+    print(f"🚨 ALERT: NEW ACCESS REQUEST FROM [{name}]", flush=True)
+    print(f"🔑 SECURE PIN TO GIVE THEM: {pin}", flush=True)
+    print("🔥"*25 + "\n", flush=True)
+    
+    emit('pin_request_sent')
 
 @socketio.on('verify_cloud_pin')
 def handle_verification(data):
@@ -66,7 +40,7 @@ def handle_verification(data):
         print(f"🚫 Access Denied for {request.sid}", flush=True)
         emit('auth_failed')
 
-# --- CINEMA ROOM LOGIC ---
+# --- 2. CINEMA ROOM LOGIC ---
 @socketio.on('join')
 def on_join(data):
     global current_host_sid, current_host_name
@@ -109,7 +83,7 @@ def on_grant_host(data):
         current_host_name = users[new_sid]['name']
         emit('host_update', {'host_sid': current_host_sid, 'host_name': current_host_name}, broadcast=True)
 
-# --- MULTIMEDIA SYNC & SOCIAL ---
+# --- 3. MULTIMEDIA SYNC & SOCIAL ---
 @socketio.on('sync_event')
 def on_sync(data): emit('sync_event', data, broadcast=True, include_self=False)
 
