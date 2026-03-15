@@ -42,8 +42,13 @@ class VideoPlayer(QMainWindow):
 
         self.build_auth_screen(); self.build_login_screen(); self.build_splash_screen(); self.build_main_cinema()
 
-        if os.path.exists(self.license_path): self.app_stack.setCurrentIndex(1)
-        else: self.app_stack.setCurrentIndex(0)
+        # Check local license first
+        if os.path.exists(self.license_path): 
+            self.app_stack.setCurrentIndex(1)
+        else: 
+            self.app_stack.setCurrentIndex(0)
+            # INSTANT CONNECTION: Start connecting the second the lock screen appears!
+            threading.Thread(target=self.silent_auth_connect, daemon=True).start()
 
         self.curtain = QWidget(self); self.curtain.setStyleSheet("background-color: #121212;"); self.curtain.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.curtain_effect = QGraphicsOpacityEffect(self.curtain); self.curtain.setGraphicsEffect(self.curtain_effect); self.curtain_effect.setOpacity(0.0); self.curtain.hide()
@@ -52,20 +57,24 @@ class VideoPlayer(QMainWindow):
         self.connected_signal.connect(self.transition_to_cinema)
         self.error_signal.connect(lambda m: QMessageBox.critical(self, "Error", m))
 
-    # --- UPDATED AUTH SCREEN UI ---
+    def silent_auth_connect(self):
+        try:
+            if not sio.connected:
+                sio.connect(self.server_url, wait_timeout=15)
+        except: pass
+
+    # --- AUTH SCREEN UI ---
     def build_auth_screen(self):
         self.auth_widget = QWidget(); layout = QVBoxLayout(self.auth_widget); layout.setAlignment(Qt.AlignCenter)
         t = QLabel("🔐 Cloud Security"); t.setStyleSheet("font-size: 32px; font-weight: bold; color: #E50914;")
         d = QLabel("This application is private. Request a PIN to your email to unlock."); d.setStyleSheet("color: #aaa; margin: 20px;")
         
-        # New Text Box for the User's Name
         self.name_req_input = QLineEdit(); self.name_req_input.setPlaceholderText("Enter your name here...")
         self.name_req_input.setFixedWidth(300)
         self.name_req_input.setStyleSheet("font-size: 16px; padding: 12px; background: #222; border: 1px solid #444; border-radius: 5px; color: white;")
         
         self.req_btn = QPushButton("Request PIN via Cloud Server"); self.req_btn.setFixedWidth(300); self.req_btn.setStyleSheet("background: #444; padding: 12px; font-weight: bold;")
         
-        # Spacing
         sep = QWidget(); sep.setFixedHeight(20)
         
         self.pin_in = QLineEdit(); self.pin_in.setPlaceholderText("Enter 6-digit PIN..."); self.pin_in.setFixedWidth(300); self.pin_in.setEchoMode(QLineEdit.Password)
@@ -91,19 +100,18 @@ class VideoPlayer(QMainWindow):
         self.req_btn.setText("Sending Request to Cloud...")
         self.req_btn.setEnabled(False)
         
-        def attempt_request():
-            try:
-                if not sio.connected: 
-                    sio.connect(self.server_url, wait_timeout=15)
-                sio.emit('request_cloud_pin', {'name': name})
-            except Exception as e:
-                self.auth_signal.emit(f"ERROR: {str(e)}")
-
-        threading.Thread(target=attempt_request, daemon=True).start()
+        # BULLETPROOF LOGIC: Only emit if the silent connection finished!
+        if sio.connected:
+            sio.emit('request_cloud_pin', {'name': name})
+        else:
+            self.auth_signal.emit("ERROR: Cloud server is currently waking up from sleep mode. Please wait 15 seconds and click Request again.")
 
     def cloud_verify_clicked(self):
         if not self.pin_in.text(): return
-        sio.emit('verify_cloud_pin', {'pin': self.pin_in.text()})
+        if sio.connected:
+            sio.emit('verify_cloud_pin', {'pin': self.pin_in.text()})
+        else:
+            QMessageBox.warning(self, "Offline", "Not connected to the cloud server yet.")
 
     def handle_auth_result(self, res):
         self.req_btn.setText("Request PIN via Cloud Server")
@@ -115,9 +123,8 @@ class VideoPlayer(QMainWindow):
             except: pass
             self.animate_stack_transition(1)
         elif res == "FAILED": QMessageBox.warning(self, "Denied", "Incorrect PIN.")
-        elif res.startswith("ERROR:"): QMessageBox.critical(self, "Connection Error", f"Server Offline: {res}")
+        elif res.startswith("ERROR:"): QMessageBox.warning(self, "Please Wait", res)
         else: QMessageBox.information(self, "Status", res)
-    # -------------------------------
 
     def closeEvent(self, event):
         try: sio.disconnect(); time.sleep(0.5)
@@ -231,7 +238,7 @@ class VideoPlayer(QMainWindow):
                 self.connected_signal.emit()
                 
         @sio.on('pin_request_sent')
-        def on_ps(): self.auth_signal.emit("PIN Request Sent! Check your email.")
+        def on_ps(): self.auth_signal.emit("PIN request sent! Check with somajitdeb2005@gmail.com.")
         @sio.on('auth_success')
         def on_as(): self.auth_signal.emit("SUCCESS")
         @sio.on('auth_failed')
