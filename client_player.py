@@ -9,9 +9,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
                                QLineEdit, QLabel, QMessageBox, QStackedWidget,
                                QSlider, QGraphicsOpacityEffect, QProgressBar, 
-                               QGraphicsView, QGraphicsScene) # NEW: The Graphics Engine
+                               QGraphicsView, QGraphicsScene)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtMultimediaWidgets import QGraphicsVideoItem # NEW: The Graphics Video Item
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF
 
 sio = socketio.Client()
@@ -195,27 +195,17 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
-        # ================= THE NEW GAMING ENGINE FIX =================
-        # 1. Create a Graphics View (The Canvas)
         self.video_view = QGraphicsView()
         self.video_view.setStyleSheet("background: black; border: none;")
         self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
-        # 2. Create the Scene (The World)
         self.video_scene = QGraphicsScene()
         self.video_view.setScene(self.video_scene)
-        
-        # 3. Add the Video to the Scene
         self.video_item = QGraphicsVideoItem()
         self.video_scene.addItem(self.video_item)
-        
         self.media_layout.addWidget(self.video_view, stretch=1)
-        
-        # Track resizing and mouse clicks
         self.video_view.installEventFilter(self)
         self.video_view.viewport().installEventFilter(self)
-        # =============================================================
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
         self.media_layout.addWidget(self.slider)
@@ -231,15 +221,22 @@ class VideoPlayer(QMainWindow):
         self.hype_bar = QProgressBar(); self.hype_bar.setFormat("🔥 GLOBAL HYPE: %p%")
         self.chat_history = QTextEdit(); self.chat_history.setReadOnly(True)
         self.chat_input = QLineEdit(); self.chat_input.setPlaceholderText("Chat..."); self.chat_input.returnPressed.connect(self.send_chat_message)
-        reac = QHBoxLayout()
-        for e in ["❤️", "😂", "😲", "🔥", "🎉"]:
+        
+        # --- ADDED 10 EMOJIS FOR THE REACTION BAR ---
+        reac_widget = QWidget()
+        reac = QHBoxLayout(reac_widget)
+        reac.setContentsMargins(0, 0, 0, 0)
+        for e in ["❤️", "😂", "😲", "🔥", "🎉", "👍", "👎", "😭", "🍿", "👀"]:
             b = QPushButton(e); b.clicked.connect(lambda chk, emoji=e: self.send_reaction(emoji))
+            b.setCursor(Qt.PointingHandCursor)
             reac.addWidget(b)
-        soc.addWidget(self.hype_bar); soc.addWidget(self.chat_history); soc.addWidget(self.chat_input); soc.addLayout(reac)
+        # --------------------------------------------
+        
+        soc.addWidget(self.hype_bar); soc.addWidget(self.chat_history); soc.addWidget(self.chat_input); soc.addWidget(reac_widget)
         l.addLayout(soc, stretch=1); self.app_stack.addWidget(self.cinema_widget)
 
         self.media_player = QMediaPlayer(); self.audio_output = QAudioOutput()
-        self.media_player.setVideoOutput(self.video_item) # Send video to the gaming engine!
+        self.media_player.setVideoOutput(self.video_item) 
         self.media_player.setAudioOutput(self.audio_output)
         self.media_player.positionChanged.connect(lambda p: self.slider.setValue(p)); self.media_player.durationChanged.connect(lambda d: self.slider.setRange(0, d))
 
@@ -282,32 +279,29 @@ class VideoPlayer(QMainWindow):
         except Exception as e:
             self.error_signal.emit(f"⚠️ Connection Failed:\n{str(e)}\n\nCheck Render Start Command!")
 
-    # --- THE GRAPHICS VIEW EVENT MANAGER ---
     def eventFilter(self, obj, ev):
-        # Keep the video sized perfectly to the window
         if obj == self.video_view and ev.type() == QEvent.Type.Resize:
             self.video_item.setSize(QSizeF(ev.size().width(), ev.size().height()))
             self.video_scene.setSceneRect(0, 0, ev.size().width(), ev.size().height())
             
-        # Catch Laser Clicks perfectly inside the gaming canvas
         if obj == self.video_view.viewport() and ev.type() == QEvent.Type.MouseButtonPress:
             x_pct = ev.position().x() / max(1, self.video_view.width())
             y_pct = ev.position().y() / max(1, self.video_view.height())
-            self.draw_laser({'x': x_pct, 'y': y_pct, 'color': self.my_color})
+            # Sending 'red' instead of user color for the ping!
+            self.draw_laser({'x': x_pct, 'y': y_pct, 'color': '#FF0000'})
             sio.emit('laser_ping', {'x': x_pct, 'y': y_pct})
             return True
             
         return super().eventFilter(obj, ev)
-    # ---------------------------------------
 
     @Slot(dict)
     def draw_laser(self, d):
-        x, y, c = d['x'], d['y'], d['color']
+        x, y, c = d['x'], d['y'], '#FF0000' # Forced Red Circle
         tx, ty = int(x * self.video_view.width()), int(y * self.video_view.height())
         
-        # We spawn the animation inside the Viewport. It is GUARANTEED to draw over the video.
+        # Explicit min-width and min-height forces Windows to respect the perfectly round border-radius
         p = QLabel(self.video_view.viewport())
-        p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,255,255,50);")
+        p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,0,0,50); min-width: 50px; min-height: 50px; max-width: 50px; max-height: 50px;")
         p.setGeometry(tx-25, ty-25, 50, 50)
         p.show() 
         
@@ -318,7 +312,7 @@ class VideoPlayer(QMainWindow):
     @Slot()
     def trigger_confetti(self):
         for _ in range(40):
-            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_view.viewport())
+            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊", "💯", "🍿"]), self.video_view.viewport())
             l.setStyleSheet("font-size: 35px; background:transparent;")
             l.setAttribute(Qt.WA_TransparentForMouseEvents)
             l.show() 
@@ -372,9 +366,44 @@ class VideoPlayer(QMainWindow):
 
     def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
     
+    # --- NEW: HOTKEY SYSTEM WITH SMART FOCUS ---
     def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key_Escape and self.isFullScreen(): self.toggle_fullscreen()
-        super().keyPressEvent(ev)
+        # Prevent Hotkeys from firing if you are actively typing a chat message!
+        if isinstance(self.focusWidget(), (QLineEdit, QTextEdit)):
+            super().keyPressEvent(ev)
+            return
+
+        if ev.key() == Qt.Key_Escape and self.isFullScreen(): 
+            self.toggle_fullscreen()
+        elif ev.key() == Qt.Key_Space:
+            self.play_pause_clicked()
+        elif ev.key() == Qt.Key_Right:
+            self.skip_video(forward=True)
+        elif ev.key() == Qt.Key_Left:
+            self.skip_video(forward=False)
+        else:
+            super().keyPressEvent(ev)
+            
+    def skip_video(self, forward):
+        if not self.is_host: return
+        duration = self.media_player.duration()
+        if duration == 0: return
+
+        # Smart Skip Math (5s for short videos, 10s for medium, 20s for long)
+        if duration < 300000: step = 5000       # Under 5 mins
+        elif duration < 1200000: step = 10000   # Under 20 mins
+        else: step = 20000                      # Over 20 mins
+
+        current_pos = self.media_player.position()
+        new_pos = current_pos + step if forward else current_pos - step
+        new_pos = max(0, min(new_pos, duration)) # Ensure we don't skip past the end!
+        
+        self.set_position(new_pos)
+        
+        # Show a helpful system message
+        dir_text = "forward" if forward else "backward"
+        self.chat_history.append(f"<i style='color: gray;'>Skipped {step//1000}s {dir_text}...</i>")
+    # -------------------------------------------
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open MP4", "", "Video (*.mp4)")
