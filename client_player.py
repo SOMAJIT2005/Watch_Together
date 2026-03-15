@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
                                QGraphicsView, QGraphicsScene)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-# Audit Check: confirming QPropertyAnimation is included
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
 from PySide6.QtGui import QColor, QPen, QBrush, QFont, QIcon 
 
@@ -35,12 +34,12 @@ class VideoPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Priority 1: Set Focus Policy so keyboard shortcuts always work
         self.setFocusPolicy(Qt.StrongFocus) 
         
-        # Priority 2: License Setup
+        # --- LICENSE & SECURITY SETUP ---
         self.MASTER_PIN = "WATCH-2100" 
         self.license_path = os.path.join(os.environ.get('APPDATA', os.path.expanduser("~")), "watch_together_v1.lic")
+        # --------------------------------
         
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
         self.username = "Guest"
@@ -49,7 +48,6 @@ class VideoPlayer(QMainWindow):
         
         self.setWindowTitle("Watch Together | CSE 2100 Project")
         
-        # Resource helper for bundling icon.ico inside the .exe
         def resource_path(relative_path):
             try: base_path = sys._MEIPASS
             except Exception: base_path = os.path.abspath(".")
@@ -75,17 +73,15 @@ class VideoPlayer(QMainWindow):
         self.app_stack = QStackedWidget()
         self.main_layout.addWidget(self.app_stack)
 
-        # Build Screens in order (0=Auth, 1=Login, 2=Splash, 3=Cinema)
         self.build_auth_screen()
         self.build_login_screen()
         self.build_splash_screen()
         self.build_main_cinema()
 
-        # Gatekeeper Logic
         if os.path.exists(self.license_path):
-            self.app_stack.setCurrentIndex(1) # Start at Login
+            self.app_stack.setCurrentIndex(1)
         else:
-            self.app_stack.setCurrentIndex(0) # Start at Lock Screen
+            self.app_stack.setCurrentIndex(0)
 
         self.curtain = QWidget(self)
         self.curtain.setStyleSheet("background-color: #121212;") 
@@ -100,10 +96,8 @@ class VideoPlayer(QMainWindow):
         self.error_signal.connect(self.handle_connection_error)
 
     def build_auth_screen(self):
-        self.auth_widget = QWidget()
-        layout = QVBoxLayout(self.auth_widget); layout.setAlignment(Qt.AlignCenter)
-        title = QLabel("🔐 Application Locked")
-        title.setStyleSheet("font-size: 32px; font-weight: bold; color: #E50914;")
+        self.auth_widget = QWidget(); layout = QVBoxLayout(self.auth_widget); layout.setAlignment(Qt.AlignCenter)
+        title = QLabel("🔐 Application Locked"); title.setStyleSheet("font-size: 32px; font-weight: bold; color: #E50914;")
         desc = QLabel("Please request a PIN from the Developer to access this software:\n<b>somajitdeb2005@gmail.com</b>")
         desc.setAlignment(Qt.AlignCenter); desc.setStyleSheet("font-size: 14px; color: #aaa; margin: 30px;")
         self.pin_input = QLineEdit(); self.pin_input.setPlaceholderText("Enter Secret PIN..."); self.pin_input.setEchoMode(QLineEdit.Password)
@@ -116,7 +110,7 @@ class VideoPlayer(QMainWindow):
     def verify_pin(self):
         if self.pin_input.text() == self.MASTER_PIN:
             with open(self.license_path, "w") as f: f.write("LICENSED")
-            self.animate_stack_transition(1) # Login Screen
+            self.animate_stack_transition(1) 
         else: QMessageBox.critical(self, "Invalid PIN", "Access denied.")
 
     def closeEvent(self, event):
@@ -135,8 +129,7 @@ class VideoPlayer(QMainWindow):
 
     def build_login_screen(self):
         self.login_widget = QWidget(); layout = QVBoxLayout(self.login_widget); layout.setAlignment(Qt.AlignCenter)
-        title = QLabel("🍿 WATCH TOGETHER")
-        title.setStyleSheet("font-size: 40px; font-weight: bold; color: #E50914; margin-bottom: 20px;")
+        title = QLabel("🍿 WATCH TOGETHER"); title.setStyleSheet("font-size: 40px; font-weight: bold; color: #E50914; margin-bottom: 20px;")
         avatar_layout = QHBoxLayout(); self.avatar_buttons = []
         for a in ["🥷", "🤖", "👽", "👻", "🤠"]:
             btn = QPushButton(a); btn.setStyleSheet("font-size: 30px; padding: 10px; background: transparent; border-radius: 8px;")
@@ -177,8 +170,7 @@ class VideoPlayer(QMainWindow):
 
     @Slot(str)
     def handle_connection_error(self, msg):
-        self.p_timer.stop()
-        self.loading_label.setText(msg); self.loading_label.setStyleSheet("font-size: 16px; color: #ff3333;")
+        self.p_timer.stop(); self.loading_label.setText(msg); self.loading_label.setStyleSheet("font-size: 16px; color: #ff3333;")
 
     @Slot()
     def transition_to_cinema(self):
@@ -201,7 +193,7 @@ class VideoPlayer(QMainWindow):
         self.video_view.installEventFilter(self); self.video_view.viewport().installEventFilter(self)
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False); self.slider.setFocusPolicy(Qt.NoFocus); self.media_layout.addWidget(self.slider)
         ctrl = QHBoxLayout()
-        self.open_btn = QPushButton("📁 Open .mp4"); self.open_btn.clicked.connect(self.open_file); self.open_btn.setFocusPolicy(Qt.NoFocus) 
+        self.open_btn = QPushButton("📁 Open Movie File"); self.open_btn.clicked.connect(self.open_file); self.open_btn.setFocusPolicy(Qt.NoFocus) 
         self.play_btn = QPushButton("⏯️ Play / Pause"); self.play_btn.clicked.connect(self.play_pause_clicked); self.play_btn.setEnabled(False); self.play_btn.setFocusPolicy(Qt.NoFocus) 
         ctrl.addWidget(self.open_btn); ctrl.addWidget(self.play_btn); self.media_layout.addLayout(ctrl); l.addLayout(self.media_layout, stretch=3)
         soc = QVBoxLayout()
@@ -310,10 +302,13 @@ class VideoPlayer(QMainWindow):
         new_pos = max(0, min(self.media_player.position() + (step if forward else -step), d))
         self.set_position(new_pos); self.chat_history.append(f"<i style='color: gray;'>Skipped {step//1000}s {'forward' if forward else 'backward'}...</i>")
 
+    # --- UPDATED: MULTI-FORMAT SUPPORT ---
     def open_file(self):
-        if path := QFileDialog.getOpenFileName(self, "Open MP4", "", "Video (*.mp4)")[0]:
+        # Recognizes .mp4, .mkv, .avi, .mov, .wmv, and .flv
+        if path := QFileDialog.getOpenFileName(self, "Open Movie", "", "Video Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv);;All Files (*)")[0]:
             self.my_filename = os.path.basename(path); self.media_player.setSource(QUrl.fromLocalFile(path)); self.media_player.pause()
             sio.emit('file_info', {'filename': self.my_filename}); self.setFocus()
+    # -------------------------------------
 
     def play_pause_clicked(self):
         if not self.is_host or (self.friend_filename and self.my_filename != self.friend_filename): return
