@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
                                QGraphicsView, QGraphicsScene)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
-from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF
+from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
+from PySide6.QtGui import QColor, QPen, QBrush, QFont # NEW: Native Graphics Drawing Tools
 
 sio = socketio.Client()
 
@@ -195,15 +196,23 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
+        # 1. Create a Graphics View (The Canvas)
         self.video_view = QGraphicsView()
         self.video_view.setStyleSheet("background: black; border: none;")
         self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        # 2. Create the Scene (The World)
         self.video_scene = QGraphicsScene()
         self.video_view.setScene(self.video_scene)
+        
+        # 3. Add the Video to the Scene
         self.video_item = QGraphicsVideoItem()
         self.video_scene.addItem(self.video_item)
+        
         self.media_layout.addWidget(self.video_view, stretch=1)
+        
+        # Track resizing and mouse clicks directly on the canvas viewport
         self.video_view.installEventFilter(self)
         self.video_view.viewport().installEventFilter(self)
 
@@ -222,7 +231,6 @@ class VideoPlayer(QMainWindow):
         self.chat_history = QTextEdit(); self.chat_history.setReadOnly(True)
         self.chat_input = QLineEdit(); self.chat_input.setPlaceholderText("Chat..."); self.chat_input.returnPressed.connect(self.send_chat_message)
         
-        # --- ADDED 10 EMOJIS FOR THE REACTION BAR ---
         reac_widget = QWidget()
         reac = QHBoxLayout(reac_widget)
         reac.setContentsMargins(0, 0, 0, 0)
@@ -230,7 +238,6 @@ class VideoPlayer(QMainWindow):
             b = QPushButton(e); b.clicked.connect(lambda chk, emoji=e: self.send_reaction(emoji))
             b.setCursor(Qt.PointingHandCursor)
             reac.addWidget(b)
-        # --------------------------------------------
         
         soc.addWidget(self.hype_bar); soc.addWidget(self.chat_history); soc.addWidget(self.chat_input); soc.addWidget(reac_widget)
         l.addLayout(soc, stretch=1); self.app_stack.addWidget(self.cinema_widget)
@@ -287,54 +294,81 @@ class VideoPlayer(QMainWindow):
         if obj == self.video_view.viewport() and ev.type() == QEvent.Type.MouseButtonPress:
             x_pct = ev.position().x() / max(1, self.video_view.width())
             y_pct = ev.position().y() / max(1, self.video_view.height())
-            # Sending 'red' instead of user color for the ping!
             self.draw_laser({'x': x_pct, 'y': y_pct, 'color': '#FF0000'})
             sio.emit('laser_ping', {'x': x_pct, 'y': y_pct})
             return True
             
         return super().eventFilter(obj, ev)
 
+    # ================== THE NATIVE GRAPHICS ANIMATIONS ==================
     @Slot(dict)
     def draw_laser(self, d):
-        x, y, c = d['x'], d['y'], '#FF0000' # Forced Red Circle
-        tx, ty = int(x * self.video_view.width()), int(y * self.video_view.height())
+        tx, ty = int(d['x'] * self.video_view.width()), int(d['y'] * self.video_view.height())
         
-        # Explicit min-width and min-height forces Windows to respect the perfectly round border-radius
-        p = QLabel(self.video_view.viewport())
-        p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,0,0,50); min-width: 50px; min-height: 50px; max-width: 50px; max-height: 50px;")
-        p.setGeometry(tx-25, ty-25, 50, 50)
-        p.show() 
+        # Native Ellipse (No HTML/CSS labels to cause black squares!)
+        ellipse = self.video_scene.addEllipse(0, 0, 0, 0, QPen(QColor(255, 0, 0), 4), QBrush(Qt.transparent))
         
-        a = QPropertyAnimation(p, b"geometry")
-        a.setDuration(800); a.setStartValue(QRect(tx-25, ty-25, 50, 50)); a.setEndValue(QRect(tx, ty, 0, 0))
-        a.finished.connect(p.deleteLater); a.start(); self.active_animations.append(a)
+        anim = QVariantAnimation(self)
+        anim.setDuration(1000)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutQuad)
+        
+        def update_droplet(val):
+            # Math for the "Ripple/Droplet" effect: Expands from 10 to 100 pixels, fades out!
+            size = 10 + (90 * val)
+            ellipse.setRect(tx - size/2, ty - size/2, size, size)
+            ellipse.setOpacity(1.0 - val) 
+            
+        anim.valueChanged.connect(update_droplet)
+        anim.finished.connect(lambda: self.video_scene.removeItem(ellipse))
+        anim.start()
+        self.active_animations.append(anim)
 
     @Slot()
     def trigger_confetti(self):
         for _ in range(40):
-            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊", "💯", "🍿"]), self.video_view.viewport())
-            l.setStyleSheet("font-size: 35px; background:transparent;")
-            l.setAttribute(Qt.WA_TransparentForMouseEvents)
-            l.show() 
+            txt = self.video_scene.addText(random.choice(["🎉", "✨", "🔥", "🎊", "💯", "🍿"]))
+            f = txt.font(); f.setPointSize(35); txt.setFont(f)
             
             sx, sy = self.video_view.width()//2, self.video_view.height()//2
-            l.move(sx, sy)
             ex, ey = sx + random.randint(-500, 500), sy + random.randint(-500, 500)
             
-            a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(ex, ey)); a.setDuration(random.randint(1000, 2500)); a.setEasingCurve(QEasingCurve.OutExpo)
-            a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
+            anim = QVariantAnimation(self)
+            anim.setDuration(random.randint(1000, 2500))
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.OutExpo)
+            
+            def update_conf(val, item=txt, start_x=sx, start_y=sy, end_x=ex, end_y=ey):
+                item.setPos(start_x + (end_x - start_x)*val, start_y + (end_y - start_y)*val)
+                if val > 0.8: item.setOpacity((1.0 - val) * 5)
+                
+            anim.valueChanged.connect(update_conf)
+            anim.finished.connect(lambda item=txt: self.video_scene.removeItem(item))
+            anim.start()
+            self.active_animations.append(anim)
 
     def trigger_emoji(self, e):
-        l = QLabel(e, self.video_view.viewport())
-        l.setStyleSheet("font-size: 48px; background:transparent;")
-        l.setAttribute(Qt.WA_TransparentForMouseEvents)
-        l.show()
+        txt = self.video_scene.addText(e)
+        f = txt.font(); f.setPointSize(45); txt.setFont(f)
         
         sx, sy = random.randint(20, max(20, self.video_view.width()-80)), self.video_view.height()-60
-        l.move(sx, sy)
         
-        a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start()
-        self.active_animations.append(a)
+        anim = QVariantAnimation(self)
+        anim.setDuration(2500)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        
+        def update_emoji(val):
+            txt.setPos(sx, sy - (250 * val)) # Float upwards
+            if val > 0.7: txt.setOpacity((1.0 - val) * 3.3) # Fade out near top
+            
+        anim.valueChanged.connect(update_emoji)
+        anim.finished.connect(lambda: self.video_scene.removeItem(txt))
+        anim.start()
+        self.active_animations.append(anim)
+    # ====================================================================
 
     def set_light_theme(self):
         self.setStyleSheet("background: #f9f9f9; color: #222;")
@@ -366,9 +400,7 @@ class VideoPlayer(QMainWindow):
 
     def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
     
-    # --- NEW: HOTKEY SYSTEM WITH SMART FOCUS ---
     def keyPressEvent(self, ev):
-        # Prevent Hotkeys from firing if you are actively typing a chat message!
         if isinstance(self.focusWidget(), (QLineEdit, QTextEdit)):
             super().keyPressEvent(ev)
             return
@@ -389,21 +421,17 @@ class VideoPlayer(QMainWindow):
         duration = self.media_player.duration()
         if duration == 0: return
 
-        # Smart Skip Math (5s for short videos, 10s for medium, 20s for long)
-        if duration < 300000: step = 5000       # Under 5 mins
-        elif duration < 1200000: step = 10000   # Under 20 mins
-        else: step = 20000                      # Over 20 mins
+        if duration < 300000: step = 5000       
+        elif duration < 1200000: step = 10000   
+        else: step = 20000                      
 
         current_pos = self.media_player.position()
         new_pos = current_pos + step if forward else current_pos - step
-        new_pos = max(0, min(new_pos, duration)) # Ensure we don't skip past the end!
+        new_pos = max(0, min(new_pos, duration)) 
         
         self.set_position(new_pos)
-        
-        # Show a helpful system message
         dir_text = "forward" if forward else "backward"
         self.chat_history.append(f"<i style='color: gray;'>Skipped {step//1000}s {dir_text}...</i>")
-    # -------------------------------------------
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open MP4", "", "Video (*.mp4)")
