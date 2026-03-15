@@ -1,10 +1,36 @@
 import os
 import random
+import json
+import urllib.request
 from flask import Flask, request
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# --- ADMIN NOTIFICATION SYSTEM (DISCORD) ---
+DISCORD_WEBHOOK_URL = "https://discordapp.com/api/webhooks/1482847532714299555/WYZFZghAG9uY4hfUngWJiVW8gP0r6TPsIbloNHFz7ejildt_l2Rur-dI89dlPh_Ct3CG"
+
+def send_mobile_ping(name, pin):
+    data = {
+        "content": f"🚨 **New Access Request!**\n👤 **User:** `{name}`\n🔑 **PIN:** `{pin}`\n*Awaiting your approval.*"
+    }
+    
+    # We add a User-Agent so Discord doesn't block the request
+    req = urllib.request.Request(
+        DISCORD_WEBHOOK_URL, 
+        data=json.dumps(data).encode('utf-8'), 
+        headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'WatchTogether-Server/1.0'
+        }
+    )
+    
+    try:
+        urllib.request.urlopen(req)
+        print("✅ Discord Ping Sent to Mobile!", flush=True)
+    except Exception as e:
+        print(f"❌ Discord Ping Failed: {e}", flush=True)
 
 # State Management
 unverified_requests = {}
@@ -13,18 +39,18 @@ current_host_sid = None
 current_host_name = None
 global_hype = 0
 
-# --- 1. CLOUD PIN SECURITY (ADMIN CONSOLE MODE) ---
+# --- CLOUD PIN SECURITY ---
 @socketio.on('request_cloud_pin')
 def handle_pin_request(data):
     name = data.get('name', 'Anonymous')
     pin = str(random.randint(100000, 999999))
     unverified_requests[request.sid] = pin
     
-    # --- THIS PRINTS MASSIVELY IN YOUR RENDER LOGS ---
-    print("\n" + "🔥"*25, flush=True)
-    print(f"🚨 ALERT: NEW ACCESS REQUEST FROM [{name}]", flush=True)
-    print(f"🔑 SECURE PIN TO GIVE THEM: {pin}", flush=True)
-    print("🔥"*25 + "\n", flush=True)
+    # 1. Print to Render Logs (Backup)
+    print(f"\n🚨 ALERT: ACCESS REQUEST FROM [{name}] - PIN: {pin}\n", flush=True)
+    
+    # 2. Send Push Notification to your Phone!
+    send_mobile_ping(name, pin)
     
     emit('pin_request_sent')
 
@@ -40,7 +66,7 @@ def handle_verification(data):
         print(f"🚫 Access Denied for {request.sid}", flush=True)
         emit('auth_failed')
 
-# --- 2. CINEMA ROOM LOGIC ---
+# --- CINEMA ROOM LOGIC ---
 @socketio.on('join')
 def on_join(data):
     global current_host_sid, current_host_name
@@ -83,7 +109,7 @@ def on_grant_host(data):
         current_host_name = users[new_sid]['name']
         emit('host_update', {'host_sid': current_host_sid, 'host_name': current_host_name}, broadcast=True)
 
-# --- 3. MULTIMEDIA SYNC & SOCIAL ---
+# --- MULTIMEDIA SYNC & SOCIAL ---
 @socketio.on('sync_event')
 def on_sync(data): emit('sync_event', data, broadcast=True, include_self=False)
 
