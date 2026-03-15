@@ -13,15 +13,14 @@ MY_EMAIL = "somajitdeb2005@gmail.com"
 SMTP_USER = os.environ.get("SMTP_EMAIL") 
 SMTP_PASS = os.environ.get("SMTP_PASSWORD") 
 
-# State Management
 unverified_requests = {}
 users = {}
 current_host_sid = None
 current_host_name = None
 global_hype = 0
 
-# --- 1. CLOUD PIN SECURITY ---
 def send_auth_email(target_name, pin):
+    print(f"📧 Attempting to send email to {MY_EMAIL}...") # LOG TO RENDER
     msg = EmailMessage()
     msg.set_content(f"Watch Together Security Alert\n\nUser '{target_name}' is requesting access to your private server.\nProvide them this 6-digit PIN: {pin}")
     msg['Subject'] = f"🔑 Access Request: {target_name}"
@@ -31,32 +30,38 @@ def send_auth_email(target_name, pin):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
+        print("✅ Email sent successfully!") # LOG TO RENDER
         return True
     except Exception as e:
-        print(f"SMTP Error: {e}")
+        print(f"❌ SMTP Error: {e}") # LOG TO RENDER
         return False
 
 @socketio.on('request_cloud_pin')
 def handle_pin_request(data):
     name = data.get('name', 'Anonymous')
+    print(f"🚨 RECEIVED PIN REQUEST FROM: {name}") # LOG TO RENDER
+    
     pin = str(random.randint(100000, 999999))
     unverified_requests[request.sid] = pin
+    
     if send_auth_email(name, pin):
         emit('pin_request_sent')
     else:
-        emit('auth_error', {'msg': 'Cloud Email System Offline. Check Render Environment Variables.'})
+        emit('auth_error', {'msg': 'Cloud Email System Offline. Check Render Logs.'})
 
 @socketio.on('verify_cloud_pin')
 def handle_verification(data):
     guess = data.get('pin')
     actual = unverified_requests.get(request.sid)
     if guess and guess == actual:
+        print(f"🔓 Access Granted for {request.sid}") # LOG TO RENDER
         emit('auth_success')
         if request.sid in unverified_requests: del unverified_requests[request.sid]
     else:
+        print(f"🚫 Access Denied for {request.sid}") # LOG TO RENDER
         emit('auth_failed')
 
-# --- 2. CINEMA ROOM LOGIC ---
+# --- CINEMA ROOM LOGIC ---
 @socketio.on('join')
 def on_join(data):
     global current_host_sid, current_host_name
@@ -99,7 +104,7 @@ def on_grant_host(data):
         current_host_name = users[new_sid]['name']
         emit('host_update', {'host_sid': current_host_sid, 'host_name': current_host_name}, broadcast=True)
 
-# --- 3. MULTIMEDIA SYNC & SOCIAL ---
+# --- MULTIMEDIA SYNC & SOCIAL ---
 @socketio.on('sync_event')
 def on_sync(data): emit('sync_event', data, broadcast=True, include_self=False)
 
