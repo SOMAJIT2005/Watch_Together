@@ -8,10 +8,11 @@ import threading
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
                                QLineEdit, QLabel, QMessageBox, QStackedWidget,
-                               QSlider, QGraphicsOpacityEffect, QProgressBar)
+                               QSlider, QGraphicsOpacityEffect, QProgressBar, 
+                               QGraphicsView, QGraphicsScene) # NEW: The Graphics Engine
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem # NEW: The Graphics Video Item
+from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF
 
 sio = socketio.Client()
 
@@ -194,14 +195,27 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
-        # --- THE HARDWARE ACCELERATION ANIMATION FIX ---
-        self.video_widget = QVideoWidget()
-        self.video_widget.setStyleSheet("background: black;")
-        self.media_layout.addWidget(self.video_widget, stretch=1)
+        # ================= THE NEW GAMING ENGINE FIX =================
+        # 1. Create a Graphics View (The Canvas)
+        self.video_view = QGraphicsView()
+        self.video_view.setStyleSheet("background: black; border: none;")
+        self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        # We install the event filter DIRECTLY onto the video player to catch your mouse clicks!
-        self.video_widget.installEventFilter(self)
-        # -----------------------------------------------
+        # 2. Create the Scene (The World)
+        self.video_scene = QGraphicsScene()
+        self.video_view.setScene(self.video_scene)
+        
+        # 3. Add the Video to the Scene
+        self.video_item = QGraphicsVideoItem()
+        self.video_scene.addItem(self.video_item)
+        
+        self.media_layout.addWidget(self.video_view, stretch=1)
+        
+        # Track resizing and mouse clicks
+        self.video_view.installEventFilter(self)
+        self.video_view.viewport().installEventFilter(self)
+        # =============================================================
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
         self.media_layout.addWidget(self.slider)
@@ -225,7 +239,8 @@ class VideoPlayer(QMainWindow):
         l.addLayout(soc, stretch=1); self.app_stack.addWidget(self.cinema_widget)
 
         self.media_player = QMediaPlayer(); self.audio_output = QAudioOutput()
-        self.media_player.setVideoOutput(self.video_widget); self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.setVideoOutput(self.video_item) # Send video to the gaming engine!
+        self.media_player.setAudioOutput(self.audio_output)
         self.media_player.positionChanged.connect(lambda p: self.slider.setValue(p)); self.media_player.durationChanged.connect(lambda d: self.slider.setRange(0, d))
 
     def setup_network_events(self):
@@ -267,23 +282,31 @@ class VideoPlayer(QMainWindow):
         except Exception as e:
             self.error_signal.emit(f"⚠️ Connection Failed:\n{str(e)}\n\nCheck Render Start Command!")
 
+    # --- THE GRAPHICS VIEW EVENT MANAGER ---
     def eventFilter(self, obj, ev):
-        # Listen for clicks directly on the Video Widget
-        if obj == self.video_widget and ev.type() == QEvent.Type.MouseButtonPress:
-            x_pct = ev.position().x() / max(1, self.video_widget.width())
-            y_pct = ev.position().y() / max(1, self.video_widget.height())
+        # Keep the video sized perfectly to the window
+        if obj == self.video_view and ev.type() == QEvent.Type.Resize:
+            self.video_item.setSize(QSizeF(ev.size().width(), ev.size().height()))
+            self.video_scene.setSceneRect(0, 0, ev.size().width(), ev.size().height())
+            
+        # Catch Laser Clicks perfectly inside the gaming canvas
+        if obj == self.video_view.viewport() and ev.type() == QEvent.Type.MouseButtonPress:
+            x_pct = ev.position().x() / max(1, self.video_view.width())
+            y_pct = ev.position().y() / max(1, self.video_view.height())
             self.draw_laser({'x': x_pct, 'y': y_pct, 'color': self.my_color})
             sio.emit('laser_ping', {'x': x_pct, 'y': y_pct})
             return True
+            
         return super().eventFilter(obj, ev)
+    # ---------------------------------------
 
     @Slot(dict)
     def draw_laser(self, d):
         x, y, c = d['x'], d['y'], d['color']
-        tx, ty = int(x * self.video_widget.width()), int(y * self.video_widget.height())
+        tx, ty = int(x * self.video_view.width()), int(y * self.video_view.height())
         
-        # Parent the ping DIRECTLY to the video player, and use a QLabel to ensure CSS borders draw!
-        p = QLabel(self.video_widget) 
+        # We spawn the animation inside the Viewport. It is GUARANTEED to draw over the video.
+        p = QLabel(self.video_view.viewport())
         p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,255,255,50);")
         p.setGeometry(tx-25, ty-25, 50, 50)
         p.show() 
@@ -295,13 +318,12 @@ class VideoPlayer(QMainWindow):
     @Slot()
     def trigger_confetti(self):
         for _ in range(40):
-            # Parent the confetti DIRECTLY to the video player
-            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_widget)
+            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_view.viewport())
             l.setStyleSheet("font-size: 35px; background:transparent;")
             l.setAttribute(Qt.WA_TransparentForMouseEvents)
             l.show() 
             
-            sx, sy = self.video_widget.width()//2, self.video_widget.height()//2
+            sx, sy = self.video_view.width()//2, self.video_view.height()//2
             l.move(sx, sy)
             ex, ey = sx + random.randint(-500, 500), sy + random.randint(-500, 500)
             
@@ -309,13 +331,12 @@ class VideoPlayer(QMainWindow):
             a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
 
     def trigger_emoji(self, e):
-        # Parent the emojis DIRECTLY to the video player
-        l = QLabel(e, self.video_widget)
+        l = QLabel(e, self.video_view.viewport())
         l.setStyleSheet("font-size: 48px; background:transparent;")
         l.setAttribute(Qt.WA_TransparentForMouseEvents)
         l.show()
         
-        sx, sy = random.randint(20, max(20, self.video_widget.width()-80)), self.video_widget.height()-60
+        sx, sy = random.randint(20, max(20, self.video_view.width()-80)), self.video_view.height()-60
         l.move(sx, sy)
         
         a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start()
