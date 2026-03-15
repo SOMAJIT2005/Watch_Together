@@ -20,20 +20,25 @@ current_host_name = None
 global_hype = 0
 
 def send_auth_email(target_name, pin):
-    print(f"📧 Attempting to send email to {MY_EMAIL}...", flush=True) # FORCED LOG
+    print(f"📧 Attempting to send email to {MY_EMAIL} via Port 587...", flush=True) 
     msg = EmailMessage()
     msg.set_content(f"Watch Together Security Alert\n\nUser '{target_name}' is requesting access to your private server.\nProvide them this 6-digit PIN: {pin}")
     msg['Subject'] = f"🔑 Access Request: {target_name}"
     msg['From'] = SMTP_USER
     msg['To'] = MY_EMAIL
+    
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        # NEW: Using Port 587, explicit TLS, and a 10-second timeout safeguard
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=10) as smtp:
+            smtp.ehlo()
+            smtp.starttls() # This securely encrypts the connection
             smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
-        print("✅ Email sent successfully!", flush=True) # FORCED LOG
+            
+        print("✅ Email sent successfully!", flush=True) 
         return True
     except Exception as e:
-        print(f"❌ SMTP Error: {e}", flush=True) # FORCED LOG
+        print(f"❌ SMTP Error: {e}", flush=True) 
         return False
 
 @socketio.on('request_cloud_pin')
