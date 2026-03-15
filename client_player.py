@@ -3,7 +3,7 @@ import os
 import time
 import random
 import socketio
-import threading # NEW: For background internet connections!
+import threading # THIS is what prevents the app from freezing!
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
@@ -27,12 +27,14 @@ class VideoPlayer(QMainWindow):
     laser_signal = Signal(dict)
     hype_signal = Signal(int)
     confetti_signal = Signal()
-    error_signal = Signal(str) # NEW: Safely handles server crashes
+    error_signal = Signal(str) # Safely sends errors from the background thread to the UI
 
     def __init__(self):
         super().__init__()
         
+        # 🔴 VERIFY THIS URL MATCHES YOUR RENDER DASHBOARD EXACTLY!
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
+        
         self.username = "Guest"
         self.my_avatar = "👤"
         self.my_color = random.choice(["#FF3366", "#33CCFF", "#00FF99", "#FF9900", "#CC33FF", "#FFFF33"])
@@ -70,13 +72,14 @@ class VideoPlayer(QMainWindow):
         self.curtain_effect.setOpacity(0.0)
         self.curtain.hide()
 
+        # Thread-safe signal connections
         self.connected_signal.connect(self.transition_to_cinema)
         self.error_signal.connect(self.handle_connection_error)
 
     def closeEvent(self, event):
         try: sio.disconnect()
         except: pass
-        os._exit(0) 
+        os._exit(0) # Ghost Host Kill Switch
 
     def resizeEvent(self, event):
         self.curtain.resize(self.size())
@@ -147,30 +150,30 @@ class VideoPlayer(QMainWindow):
         self.welcome_label.setText(f"Welcome to the Cinema, {self.username}.")
         self.animate_stack_transition(1, callback=self.initiate_network)
 
-    # --- NEW: MULTITHREADED CONNECTION MANAGER ---
+    # ================= THE MULTITHREADING FIX =================
     def initiate_network(self):
-        self.p_timer.start(250) 
+        self.p_timer.start(250) # Start the panda animation
         
-        # We restore the 4-second delay warning text!
+        # Start the 4-second delay warning timer
         self.server_wait_timer = QTimer(self)
         self.server_wait_timer.setSingleShot(True)
         self.server_wait_timer.timeout.connect(self.show_render_warning)
         self.server_wait_timer.start(4000) 
 
-        # Put the connection task in the background so the UI doesn't freeze
+        # Fire the heavy internet connection into a background thread so the UI never freezes!
         threading.Thread(target=self.connect_to_server, daemon=True).start()
 
     def show_render_warning(self):
-        self.loading_label.setText("Waking up Cloud Server...\n(Free tier takes ~50 seconds. Please wait!)")
+        self.loading_label.setText("Waking up Cloud Server...\n(Free tier takes ~50 seconds to boot up. Please wait!)")
         self.loading_label.setStyleSheet("font-size: 16px; color: #ffcc00; margin-top: 10px;")
 
     @Slot(str)
     def handle_connection_error(self, msg):
         self.p_timer.stop() # Stop the panda
-        self.server_wait_timer.stop()
+        if hasattr(self, 'server_wait_timer'): self.server_wait_timer.stop()
         self.loading_label.setText(msg)
         self.loading_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ff3333; margin-top: 10px;")
-    # ---------------------------------------------
+    # ==========================================================
 
     @Slot()
     def transition_to_cinema(self):
@@ -292,7 +295,6 @@ class VideoPlayer(QMainWindow):
         self.player.pause() if act == 'pause' else self.player.play()
 
     def connect_to_server(self):
-        # We wrap the events inside so they only trigger after a successful connection
         @sio.on('connect')
         def on_con(): sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color}); self.connected_signal.emit()
         @sio.on('sync_event')
@@ -317,8 +319,8 @@ class VideoPlayer(QMainWindow):
         try: 
             sio.connect(self.server_url)
         except Exception as e:
-            # If the server is hard-crashed on Render, safely tell the UI to show the error
-            self.error_signal.emit("⚠️ Server Offline. Check Render.com Dashboard logs!")
+            # Safely send the crash alert back to the UI thread!
+            self.error_signal.emit("⚠️ Server Offline or URL Incorrect. Check Render!")
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
