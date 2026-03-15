@@ -37,7 +37,9 @@ class VideoPlayer(QMainWindow):
         
         self.setWindowTitle("Watch Together | CSE 2100 Project")
         self.resize(1100, 650) 
-        self.setStyleSheet("background-color: #121212;") # FIXED: Direct Dark Login Background
+        
+        # FIXED: Lock the entire app to dark mode immediately on boot
+        self.setStyleSheet("QMainWindow { background-color: #121212; } QWidget { color: white; }") 
 
         self.my_filename = None       
         self.friend_filename = None   
@@ -47,6 +49,7 @@ class VideoPlayer(QMainWindow):
         self.last_ping_time = 0
 
         self.central_widget = QWidget()
+        self.central_widget.setStyleSheet("background-color: #121212;")
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -69,6 +72,16 @@ class VideoPlayer(QMainWindow):
 
         self.connected_signal.connect(self.transition_to_cinema)
 
+    # --- FIXED: ABSOLUTE KILL SWITCH FOR GHOST HOSTS ---
+    def closeEvent(self, event):
+        try:
+            sio.disconnect()
+        except:
+            pass
+        # Forcefully terminate the python background process so the server drops the user instantly
+        os._exit(0) 
+    # ---------------------------------------------------
+
     def resizeEvent(self, event):
         self.curtain.resize(self.size())
         super().resizeEvent(event)
@@ -87,7 +100,6 @@ class VideoPlayer(QMainWindow):
 
     def build_login_screen(self):
         self.login_widget = QWidget()
-        # FIXED: Explicit Dark Style for first screen
         self.login_widget.setStyleSheet("background-color: #121212; color: white;") 
         layout = QVBoxLayout(self.login_widget); layout.setAlignment(Qt.AlignCenter)
         
@@ -118,10 +130,14 @@ class VideoPlayer(QMainWindow):
 
     def build_splash_screen(self):
         self.splash_widget = QWidget()
+        self.splash_widget.setStyleSheet("background-color: #121212;") 
         layout = QVBoxLayout(self.splash_widget); layout.setAlignment(Qt.AlignCenter)
-        self.welcome_label = QLabel(""); self.welcome_label.setStyleSheet("font-size: 32px; font-weight: bold;")
-        self.panda_label = QLabel("🐼🍿"); self.panda_label.setStyleSheet("font-size: 65px; margin-top: 20px;")
+        
+        # FIXED: Explicitly set text color to white for the Welcome label
+        self.welcome_label = QLabel(""); self.welcome_label.setStyleSheet("font-size: 32px; font-weight: bold; color: white;")
+        self.panda_label = QLabel("🐼🍿"); self.panda_label.setStyleSheet("font-size: 65px; margin-top: 20px; color: white;")
         self.loading_label = QLabel("Connecting..."); self.loading_label.setStyleSheet("font-size: 18px; color: #aaa;")
+        
         self.panda_frames = ["🐼      🍿", "🐼    🍿", "🐼  🍿", "😮 🍿", "😋🍿", "🐼🍿"]
         self.p_timer = QTimer(self); self.p_timer.timeout.connect(self.animate_panda)
         layout.addWidget(self.welcome_label); layout.addWidget(self.panda_label); layout.addWidget(self.loading_label)
@@ -146,7 +162,6 @@ class VideoPlayer(QMainWindow):
         l = QHBoxLayout(self.cinema_widget)
         self.media_layout = QVBoxLayout()
         
-        # Theme/Top Bar
         t_bar = QHBoxLayout()
         self.light_btn = QPushButton("☀️ Light Mode"); self.light_btn.clicked.connect(self.set_light_theme)
         self.dark_btn = QPushButton("🌑 Ambient Mode"); self.dark_btn.clicked.connect(self.set_ambient_theme)
@@ -171,14 +186,14 @@ class VideoPlayer(QMainWindow):
         self.media_layout.addWidget(self.slider)
 
         ctrl = QHBoxLayout()
-        self.open_btn = QPushButton("📁 Open .mp4"); self.open_btn.clicked.connect(self.open_file)
+        self.open_btn = QPushButton("📁 Open Local Movie File (.mp4)"); self.open_btn.clicked.connect(self.open_file)
         self.play_btn = QPushButton("⏯️ Play / Pause"); self.play_btn.clicked.connect(self.play_pause_clicked); self.play_btn.setEnabled(False)
         ctrl.addWidget(self.open_btn); ctrl.addWidget(self.play_btn)
         self.media_layout.addLayout(ctrl)
         l.addLayout(self.media_layout, stretch=3)
 
         soc = QVBoxLayout()
-        self.hype = QProgressBar(); self.hype.setFormat("🔥 GLOBAL HYPE: %p%"); self.hype.setStyleSheet("QProgressBar { border: 2px solid #333; text-align: center; color: white; background: #222;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
+        self.hype = QProgressBar(); self.hype.setFormat("🔥 GLOBAL HYPE: %p%")
         self.hist = QTextEdit(); self.hist.setReadOnly(True)
         self.inp = QLineEdit(); self.inp.setPlaceholderText("Chat..."); self.inp.returnPressed.connect(self.send_chat_message)
         reac = QHBoxLayout()
@@ -216,20 +231,36 @@ class VideoPlayer(QMainWindow):
     @Slot()
     def trigger_confetti(self):
         for _ in range(40):
-            l = QLabel(random.choice(["🎉", "✨", "🔥"]), self.video_overlay); l.setStyleSheet("font-size: 35px; background:transparent;"); l.show()
+            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_overlay); l.setStyleSheet("font-size: 35px; background:transparent;"); l.show()
             sx, sy = self.video_overlay.width()//2, self.video_overlay.height()//2; l.move(sx, sy)
             ex, ey = sx + random.randint(-500, 500), sy + random.randint(-500, 500)
             a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(ex, ey)); a.setDuration(random.randint(1000, 2500)); a.setEasingCurve(QEasingCurve.OutExpo)
             a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
 
+    # --- FIXED: DYNAMIC HYPE BAR COLORS ---
     def set_light_theme(self):
-        self.setStyleSheet("background: white; color: black;"); self.cinema_widget.setStyleSheet("QPushButton { background: white; color: black; border: 1px solid #ccc; }")
+        self.setStyleSheet("background: white; color: black;")
+        self.cinema_widget.setStyleSheet("QPushButton { background: white; color: black; border: 1px solid #ccc; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: white; color: black; }")
+        
+        # Light mode specific hype bar
+        self.hype.setStyleSheet("QProgressBar { border: 2px solid #ccc; text-align: center; color: black; background: #eee; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
+        
+        self.chat_history.append("<i>☀️ Light Mode On</i>")
+
     def set_ambient_theme(self):
-        self.setStyleSheet("background: #121212; color: white;"); self.cinema_widget.setStyleSheet("QPushButton { background: #222; color: white; border: 1px solid #E50914; }")
+        self.setStyleSheet("background: #121212; color: white;")
+        self.cinema_widget.setStyleSheet("QPushButton { background: #222; color: white; border: 1px solid #E50914; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: #1a1a1a; color: white; }")
+        
+        # Ambient mode specific hype bar
+        self.hype.setStyleSheet("QProgressBar { border: 2px solid #333; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
+        
+        self.chat_history.append("<i>🌑 Ambient Mode On</i>")
+    # ----------------------------------------
+
     def toggle_fullscreen(self):
         if self.isFullScreen(): self.showNormal(); self.social_panel_visible(True)
         else: self.showFullScreen(); self.social_panel_visible(False)
-    def social_panel_visible(self, v): [w.setVisible(v) for w in [self.hist, self.inp, self.open_btn, self.play_btn]]
+    def social_panel_visible(self, v): [w.setVisible(v) for w in [self.hist, self.inp, self.open_btn, self.play_btn, self.light_btn, self.dark_btn, self.hype]]
     def keyPressEvent(self, ev):
         if ev.key() == Qt.Key_Escape and self.isFullScreen(): self.toggle_fullscreen()
         super().keyPressEvent(ev)
@@ -272,7 +303,7 @@ class VideoPlayer(QMainWindow):
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
-    def update_ping(self, l): self.ping_label.setText(f"📶 {l}ms"); self.ping_label.setStyleSheet(f"color: {'green' if l<150 else 'red'}; font-weight: bold;")
+    def update_ping(self, l): self.ping_label.setText(f"📶 Ping: {l}ms"); self.ping_label.setStyleSheet(f"color: {'green' if l<150 else 'red'}; font-weight: bold;")
     def send_chat_message(self):
         t = self.inp.text()
         if t.strip(): self.hist.append(f"<b style='color:{self.my_color};'>{self.my_avatar} You:</b> {t}"); sio.emit('chat_event', t); self.inp.clear()
@@ -281,7 +312,7 @@ class VideoPlayer(QMainWindow):
     def handle_reac(self, d): self.trigger_emoji(d['emoji'])
     def trigger_emoji(self, e):
         l = QLabel(e, self.video_overlay); l.setStyleSheet("font-size: 48px; background:transparent;"); l.show()
-        sx, sy = random.randint(20, self.video_overlay.width()-80), self.video_overlay.height()-60; l.move(sx, sy)
+        sx, sy = random.randint(20, max(20, self.video_overlay.width()-80)), self.video_overlay.height()-60; l.move(sx, sy)
         a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
     def handle_sync(self, d):
         self.player.setPosition(d['time'])
