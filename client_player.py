@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
-from PySide6.QtGui import QColor, QPen, QBrush, QFont 
+from PySide6.QtGui import QColor, QPen, QBrush, QFont, QIcon 
 
 sio = socketio.Client()
 
@@ -34,7 +34,6 @@ class VideoPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # --- Make the Main Window the ultimate keyboard boss ---
         self.setFocusPolicy(Qt.StrongFocus) 
         
         self.server_url = 'https://watch-together-6kuy.onrender.com' 
@@ -43,6 +42,16 @@ class VideoPlayer(QMainWindow):
         self.my_color = random.choice(["#FF3366", "#33CCFF", "#00FF99", "#FF9900", "#CC33FF", "#FFFF33"])
         
         self.setWindowTitle("Watch Together | CSE 2100 Project")
+        
+        # --- App Icon Setup ---
+        def resource_path(relative_path):
+            try: base_path = sys._MEIPASS
+            except Exception: base_path = os.path.abspath(".")
+            return os.path.join(base_path, relative_path)
+            
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
+        # ----------------------
+        
         self.resize(1100, 650) 
         self.setStyleSheet("QMainWindow { background-color: #121212; } QWidget { color: white; }") 
 
@@ -188,10 +197,10 @@ class VideoPlayer(QMainWindow):
         
         t_bar = QHBoxLayout()
         self.light_mode_btn = QPushButton("☀️ Light Mode"); self.light_mode_btn.clicked.connect(self.set_light_theme)
-        self.light_mode_btn.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS
+        self.light_mode_btn.setFocusPolicy(Qt.NoFocus) 
         
         self.ambient_mode_btn = QPushButton("🌑 Ambient Mode"); self.ambient_mode_btn.clicked.connect(self.set_ambient_theme)
-        self.ambient_mode_btn.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS
+        self.ambient_mode_btn.setFocusPolicy(Qt.NoFocus) 
         
         t_bar.addStretch(); t_bar.addWidget(self.light_mode_btn); t_bar.addWidget(self.ambient_mode_btn)
         self.media_layout.addLayout(t_bar)
@@ -200,10 +209,10 @@ class VideoPlayer(QMainWindow):
         self.host_status_label = QLabel("👑 Host: Connecting..."); self.ping_label = QLabel("📶 Ping: -- ms")
         
         self.request_host_btn = QPushButton("🙋 Request Host"); self.request_host_btn.clicked.connect(self.request_host_clicked); self.request_host_btn.hide()
-        self.request_host_btn.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS
+        self.request_host_btn.setFocusPolicy(Qt.NoFocus) 
         
         self.fullscreen_btn = QPushButton("⛶ Fullscreen"); self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        self.fullscreen_btn.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS
+        self.fullscreen_btn.setFocusPolicy(Qt.NoFocus) 
         
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
@@ -213,7 +222,7 @@ class VideoPlayer(QMainWindow):
         self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.video_view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
-        self.video_view.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS FROM CANVAS
+        self.video_view.setFocusPolicy(Qt.NoFocus) 
         
         self.video_scene = QGraphicsScene()
         self.video_view.setScene(self.video_scene)
@@ -226,15 +235,15 @@ class VideoPlayer(QMainWindow):
         self.video_view.viewport().installEventFilter(self)
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
-        self.slider.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS FROM SLIDER
+        self.slider.setFocusPolicy(Qt.NoFocus) 
         self.media_layout.addWidget(self.slider)
 
         ctrl = QHBoxLayout()
         self.open_btn = QPushButton("📁 Open Local Movie File (.mp4)"); self.open_btn.clicked.connect(self.open_file)
-        self.open_btn.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS
+        self.open_btn.setFocusPolicy(Qt.NoFocus) 
         
         self.play_btn = QPushButton("⏯️ Play / Pause"); self.play_btn.clicked.connect(self.play_pause_clicked); self.play_btn.setEnabled(False)
-        self.play_btn.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS
+        self.play_btn.setFocusPolicy(Qt.NoFocus) 
         
         ctrl.addWidget(self.open_btn); ctrl.addWidget(self.play_btn)
         self.media_layout.addLayout(ctrl)
@@ -251,7 +260,7 @@ class VideoPlayer(QMainWindow):
         for e in ["❤️", "😂", "😲", "🔥", "🎉", "👍", "👎", "😭", "🍿", "👀"]:
             b = QPushButton(e); b.clicked.connect(lambda chk, emoji=e: self.send_reaction(emoji))
             b.setCursor(Qt.PointingHandCursor)
-            b.setFocusPolicy(Qt.NoFocus) # STRIP FOCUS FROM ALL EMOJIS
+            b.setFocusPolicy(Qt.NoFocus) 
             reac.addWidget(b)
         
         soc.addWidget(self.hype_bar); soc.addWidget(self.chat_history); soc.addWidget(self.chat_input); soc.addWidget(reac_widget)
@@ -307,7 +316,7 @@ class VideoPlayer(QMainWindow):
             self.video_scene.setSceneRect(0, 0, ev.size().width(), ev.size().height())
             
         if obj == self.video_view.viewport() and ev.type() == QEvent.Type.MouseButtonPress:
-            self.setFocus() # REMOVE FOCUS FROM CHAT WHEN CLICKING VIDEO
+            self.setFocus() 
             x_pct = ev.position().x() / max(1, self.video_view.width())
             y_pct = ev.position().y() / max(1, self.video_view.height())
             self.draw_laser({'x': x_pct, 'y': y_pct, 'color': '#FF0000'})
@@ -319,7 +328,6 @@ class VideoPlayer(QMainWindow):
     @Slot(dict)
     def draw_laser(self, d):
         tx, ty = int(d['x'] * self.video_view.width()), int(d['y'] * self.video_view.height())
-        
         ellipse = self.video_scene.addEllipse(0, 0, 0, 0, QPen(QColor(255, 0, 0), 4), QBrush(Qt.transparent))
         
         anim = QVariantAnimation(self)
@@ -392,7 +400,7 @@ class VideoPlayer(QMainWindow):
         self.request_host_btn.setStyleSheet("background: #E50914; color: white; border: none; border-radius: 5px; font-weight: bold; padding: 8px;")
         self.hype_bar.setStyleSheet("QProgressBar { border: 1px solid #ccc; border-radius: 4px; text-align: center; color: #333; background: #fff; font-weight: bold;} QProgressBar::chunk { background: #E50914; border-radius: 3px; }")
         self.chat_history.append("<i>☀️ Switched to Light Mode</i>")
-        self.setFocus() # Keep keyboard shortcuts active!
+        self.setFocus() 
 
     def set_ambient_theme(self):
         self.setStyleSheet("background: #121212; color: white;")
@@ -404,14 +412,14 @@ class VideoPlayer(QMainWindow):
         self.request_host_btn.setStyleSheet("background: #E50914; color: white; border: none; border-radius: 5px; font-weight: bold; padding: 8px;")
         self.hype_bar.setStyleSheet("QProgressBar { border: 1px solid #444; border-radius: 4px; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: #E50914; border-radius: 3px; }")
         self.chat_history.append("<i>🌑 Switched to Ambient Mode</i>")
-        self.setFocus() # Keep keyboard shortcuts active!
+        self.setFocus() 
 
     def toggle_fullscreen(self):
         if self.isFullScreen(): 
             self.showNormal(); self.social_panel_visible(True)
         else: 
             self.showFullScreen(); self.social_panel_visible(False)
-        self.setFocus() # Keep keyboard shortcuts active!
+        self.setFocus() 
 
     def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
     
@@ -453,12 +461,14 @@ class VideoPlayer(QMainWindow):
         if path:
             self.my_filename = os.path.basename(path); self.media_player.setSource(QUrl.fromLocalFile(path)); self.media_player.pause()
             sio.emit('file_info', {'filename': self.my_filename})
+        self.setFocus()
 
     def play_pause_clicked(self):
         if not self.is_host or (self.friend_filename and self.my_filename != self.friend_filename): return
         act = 'pause' if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState else 'play'
         sio.emit('sync_event', {'action': act, 'time': self.media_player.position()})
         self.media_player.pause() if act == 'pause' else self.media_player.play()
+        self.setFocus()
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
@@ -469,15 +479,13 @@ class VideoPlayer(QMainWindow):
         if t.strip():
             self.chat_history.append(f"<b style='color:{self.my_color};'>{self.my_avatar} You:</b> {t}")
             sio.emit('chat_event', t); self.chat_input.clear()
-        
-        # SMART FOCUS: Give focus back to the main window so Space/Arrows work instantly!
         self.setFocus() 
             
     def handle_chat(self, d): self.chat_history.append(f"<b style='color:{d['color']};'>{d['avatar']} {d['sender']}:</b> {d['text']}")
     def send_reaction(self, e): 
         sio.emit('reaction_event', e)
         self.trigger_emoji(e)
-        self.setFocus() # Keep hotkeys active!
+        self.setFocus() 
         
     def handle_reac(self, d): self.trigger_emoji(d['emoji'])
     
@@ -495,7 +503,7 @@ class VideoPlayer(QMainWindow):
     def request_host_clicked(self): 
         sio.emit('request_host')
         self.chat_history.append("<i>🙋 Request sent to the current host...</i>")
-        self.setFocus() # Keep hotkeys active!
+        self.setFocus() 
         
     def handle_host_dialog(self, d):
         box = QMessageBox(self)
@@ -509,6 +517,7 @@ class VideoPlayer(QMainWindow):
             box.setStyleSheet("background: #1a1a1a; color: white;")
         box.exec()
         if box.clickedButton() == yes: sio.emit('grant_host', {'new_host_sid': d['requester_sid']})
+        self.setFocus()
         
     def set_position(self, p):
         if self.is_host: self.media_player.setPosition(p); sio.emit('sync_event', {'action': 'seek', 'time': p})
