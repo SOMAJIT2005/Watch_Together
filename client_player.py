@@ -180,16 +180,16 @@ class VideoPlayer(QMainWindow):
         self.media_layout = QVBoxLayout()
         
         t_bar = QHBoxLayout()
-        self.light_btn = QPushButton("☀️ Light Mode"); self.light_btn.clicked.connect(self.set_light_theme)
-        self.dark_btn = QPushButton("🌑 Ambient Mode"); self.dark_btn.clicked.connect(self.set_ambient_theme)
-        t_bar.addStretch(); t_bar.addWidget(self.light_btn); t_bar.addWidget(self.dark_btn)
+        self.light_mode_btn = QPushButton("☀️ Light Mode"); self.light_mode_btn.clicked.connect(self.set_light_theme)
+        self.ambient_mode_btn = QPushButton("🌑 Ambient Mode"); self.ambient_mode_btn.clicked.connect(self.set_ambient_theme)
+        t_bar.addStretch(); t_bar.addWidget(self.light_mode_btn); t_bar.addWidget(self.ambient_mode_btn)
         self.media_layout.addLayout(t_bar)
 
         top = QHBoxLayout()
         self.host_status_label = QLabel("👑 Host: Connecting..."); self.ping_label = QLabel("📶 Ping: -- ms")
-        self.req_btn = QPushButton("🙋 Request Host"); self.req_btn.clicked.connect(self.request_host_clicked); self.req_btn.hide()
-        self.f_btn = QPushButton("⛶ Fullscreen"); self.f_btn.clicked.connect(self.toggle_fullscreen)
-        top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.req_btn); top.addWidget(self.f_btn)
+        self.request_host_btn = QPushButton("🙋 Request Host"); self.request_host_btn.clicked.connect(self.request_host_clicked); self.request_host_btn.hide()
+        self.fullscreen_btn = QPushButton("⛶ Fullscreen"); self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+        top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
         v_cont = QWidget(); v_cont_l = QStackedLayout(v_cont); v_cont_l.setStackingMode(QStackedLayout.StackAll)
@@ -210,24 +210,24 @@ class VideoPlayer(QMainWindow):
         l.addLayout(self.media_layout, stretch=3)
 
         soc = QVBoxLayout()
-        self.hype = QProgressBar(); self.hype.setFormat("🔥 GLOBAL HYPE: %p%")
-        self.hist = QTextEdit(); self.hist.setReadOnly(True)
-        self.inp = QLineEdit(); self.inp.setPlaceholderText("Chat..."); self.inp.returnPressed.connect(self.send_chat_message)
+        self.hype_bar = QProgressBar(); self.hype_bar.setFormat("🔥 GLOBAL HYPE: %p%")
+        self.chat_history = QTextEdit(); self.chat_history.setReadOnly(True)
+        self.chat_input = QLineEdit(); self.chat_input.setPlaceholderText("Chat..."); self.chat_input.returnPressed.connect(self.send_chat_message)
         reac = QHBoxLayout()
         for e in ["❤️", "😂", "😲", "🔥", "🎉"]:
             b = QPushButton(e); b.clicked.connect(lambda chk, emoji=e: self.send_reaction(emoji))
             reac.addWidget(b)
-        soc.addWidget(self.hype); soc.addWidget(self.hist); soc.addWidget(self.inp); soc.addLayout(reac)
+        soc.addWidget(self.hype_bar); soc.addWidget(self.chat_history); soc.addWidget(self.chat_input); soc.addLayout(reac)
         l.addLayout(soc, stretch=1); self.app_stack.addWidget(self.cinema_widget)
 
-        self.player = QMediaPlayer(); self.audio = QAudioOutput()
-        self.player.setVideoOutput(self.video_widget); self.player.setAudioOutput(self.audio)
-        self.player.positionChanged.connect(lambda p: self.slider.setValue(p)); self.player.durationChanged.connect(lambda d: self.slider.setRange(0, d))
+        self.media_player = QMediaPlayer(); self.audio_output = QAudioOutput()
+        self.media_player.setVideoOutput(self.video_widget); self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.positionChanged.connect(lambda p: self.slider.setValue(p)); self.media_player.durationChanged.connect(lambda d: self.slider.setRange(0, d))
 
     def setup_network_events(self):
         @sio.on('connect')
         def on_con(): 
-            self.my_sid = sio.get_sid() # FIXED: The app now perfectly remembers its own ID!
+            self.my_sid = sio.get_sid()
             sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color})
             self.connected_signal.emit()
             
@@ -253,7 +253,7 @@ class VideoPlayer(QMainWindow):
         self.sync_signal.connect(self.handle_sync); self.chat_signal.connect(self.handle_chat); self.file_signal.connect(self.handle_file)
         self.host_update_signal.connect(self.handle_host); self.host_request_signal.connect(self.handle_host_dialog)
         self.reaction_signal.connect(self.handle_reac); self.ping_signal.connect(self.update_ping) 
-        self.laser_signal.connect(self.draw_laser); self.hype_signal.connect(lambda v: self.hype.setValue(v)); self.confetti_signal.connect(self.trigger_confetti)
+        self.laser_signal.connect(self.draw_laser); self.hype_signal.connect(lambda v: self.hype_bar.setValue(v)); self.confetti_signal.connect(self.trigger_confetti)
 
     def connect_to_server(self):
         try: 
@@ -289,19 +289,19 @@ class VideoPlayer(QMainWindow):
     def set_light_theme(self):
         self.setStyleSheet("background: white; color: black;")
         self.cinema_widget.setStyleSheet("QPushButton { background: white; color: black; border: 1px solid #ccc; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: white; color: black; }")
-        self.hype.setStyleSheet("QProgressBar { border: 2px solid #ccc; text-align: center; color: black; background: #eee; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
+        self.hype_bar.setStyleSheet("QProgressBar { border: 2px solid #ccc; text-align: center; color: black; background: #eee; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
         self.chat_history.append("<i>☀️ Light Mode On</i>")
 
     def set_ambient_theme(self):
         self.setStyleSheet("background: #121212; color: white;")
         self.cinema_widget.setStyleSheet("QPushButton { background: #222; color: white; border: 1px solid #E50914; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: #1a1a1a; color: white; }")
-        self.hype.setStyleSheet("QProgressBar { border: 2px solid #333; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
+        self.hype_bar.setStyleSheet("QProgressBar { border: 2px solid #333; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
         self.chat_history.append("<i>🌑 Ambient Mode On</i>")
 
     def toggle_fullscreen(self):
         if self.isFullScreen(): self.showNormal(); self.social_panel_visible(True)
         else: self.showFullScreen(); self.social_panel_visible(False)
-    def social_panel_visible(self, v): [w.setVisible(v) for w in [self.hist, self.inp, self.open_btn, self.play_btn, self.light_btn, self.dark_btn, self.hype]]
+    def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
     def keyPressEvent(self, ev):
         if ev.key() == Qt.Key_Escape and self.isFullScreen(): self.toggle_fullscreen()
         super().keyPressEvent(ev)
@@ -309,26 +309,26 @@ class VideoPlayer(QMainWindow):
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open MP4", "", "Video (*.mp4)")
         if path:
-            self.my_filename = os.path.basename(path); self.player.setSource(QUrl.fromLocalFile(path)); self.player.pause()
+            self.my_filename = os.path.basename(path); self.media_player.setSource(QUrl.fromLocalFile(path)); self.media_player.pause()
             sio.emit('file_info', {'filename': self.my_filename})
 
     def play_pause_clicked(self):
         if not self.is_host or (self.friend_filename and self.my_filename != self.friend_filename): return
-        act = 'pause' if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState else 'play'
-        sio.emit('sync_event', {'action': act, 'time': self.player.position()})
-        self.player.pause() if act == 'pause' else self.player.play()
+        act = 'pause' if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState else 'play'
+        sio.emit('sync_event', {'action': act, 'time': self.media_player.position()})
+        self.media_player.pause() if act == 'pause' else self.media_player.play()
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
     def update_ping(self, l): self.ping_label.setText(f"📶 Ping: {l}ms"); self.ping_label.setStyleSheet(f"color: {'green' if l<150 else 'red'}; font-weight: bold;")
     
     def send_chat_message(self):
-        t = self.inp.text()
+        t = self.chat_input.text()
         if t.strip():
-            self.hist.append(f"<b style='color:{self.my_color};'>{self.my_avatar} You:</b> {t}")
-            sio.emit('chat_event', t); self.inp.clear()
+            self.chat_history.append(f"<b style='color:{self.my_color};'>{self.my_avatar} You:</b> {t}")
+            sio.emit('chat_event', t); self.chat_input.clear()
             
-    def handle_chat(self, d): self.hist.append(f"<b style='color:{d['color']};'>{d['avatar']} {d['sender']}:</b> {d['text']}")
+    def handle_chat(self, d): self.chat_history.append(f"<b style='color:{d['color']};'>{d['avatar']} {d['sender']}:</b> {d['text']}")
     def send_reaction(self, e): sio.emit('reaction_event', e); self.trigger_emoji(e)
     def handle_reac(self, d): self.trigger_emoji(d['emoji'])
     
@@ -339,26 +339,19 @@ class VideoPlayer(QMainWindow):
         self.active_animations.append(a)
         
     def handle_sync(self, d):
-        self.player.setPosition(d['time'])
-        if d['action'] == 'pause': self.player.pause()
-        elif d['action'] == 'play': self.player.play()
-    def handle_file(self, d): self.friend_filename = d['filename']; self.hist.append(f"⚠️ Friend loaded: {d['filename']}")
-    
-    # --- FIXED: THE HOST ASSIGNMENT LOGIC ---
+        self.media_player.setPosition(d['time'])
+        if d['action'] == 'pause': self.media_player.pause()
+        elif d['action'] == 'play': self.media_player.play()
+    def handle_file(self, d): self.friend_filename = d['filename']; self.chat_history.append(f"⚠️ Friend loaded: {d['filename']}")
     def handle_host(self, d):
-        self.is_host = (d['host_sid'] == self.my_sid) 
-        self.host_status_label.setText(f"👑 Host: {'You (' + d['host_name'] + ')' if self.is_host else d['host_name']}")
-        self.play_btn.setEnabled(self.is_host)
-        self.slider.setEnabled(self.is_host)
-        self.req_btn.setVisible(not self.is_host)
-    # ----------------------------------------
-    
-    def request_host_clicked(self): sio.emit('request_host'); self.hist.append("<i>🙋 Requesting...</i>")
+        self.is_host = (d['host_sid'] == sio.sid); self.host_status_label.setText(f"👑 Host: {'You (' + d['host_name'] + ')' if self.is_host else d['host_name']}")
+        self.play_btn.setEnabled(self.is_host); self.slider.setEnabled(self.is_host); self.request_host_btn.setVisible(not self.is_host)
+    def request_host_clicked(self): sio.emit('request_host'); self.chat_history.append("<i>🙋 Requesting...</i>")
     def handle_host_dialog(self, d):
         box = QMessageBox(self); box.setText(f"{d['requester_name']} wants Host. Grant?"); yes = box.addButton("Grant", QMessageBox.AcceptRole); box.addButton("Deny", QMessageBox.RejectRole); box.exec()
         if box.clickedButton() == yes: sio.emit('grant_host', {'new_host_sid': d['requester_sid']})
     def set_position(self, p):
-        if self.is_host: self.player.setPosition(p); sio.emit('sync_event', {'action': 'seek', 'time': p})
+        if self.is_host: self.media_player.setPosition(p); sio.emit('sync_event', {'action': 'seek', 'time': p})
 
 if __name__ == "__main__":
     app = QApplication(sys.argv); p = VideoPlayer(); p.show(); sys.exit(app.exec())
