@@ -8,7 +8,7 @@ import threading
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
                                QLineEdit, QLabel, QMessageBox, QStackedWidget,
-                               QSlider, QGraphicsOpacityEffect, QProgressBar)
+                               QSlider, QGraphicsOpacityEffect, QProgressBar, QGridLayout)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect
@@ -194,20 +194,26 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
-        # --- THE HARDWARE ACCELERATION OVERLAY FIX ---
+        # ================== THE GRID STACK FIX ==================
+        # This forces the Overlay and Video to be identically sized!
+        v_cont = QWidget()
+        grid_layout = QGridLayout(v_cont)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.video_widget = QVideoWidget()
         self.video_widget.setStyleSheet("background: black;")
-        self.media_layout.addWidget(self.video_widget, stretch=1)
-
-        # We create the overlay as a direct child of the cinema window
-        self.video_overlay = QWidget(self.cinema_widget)
+        
+        self.video_overlay = QWidget()
         self.video_overlay.setStyleSheet("background: transparent;")
         self.video_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.video_overlay.installEventFilter(self) # Catch laser clicks
         
-        # Install event filters to mathematically lock the overlay to the video boundaries
-        self.video_widget.installEventFilter(self)
-        self.video_overlay.installEventFilter(self)
-        # ---------------------------------------------
+        # Add both to Row 0, Col 0. The overlay is added second, so it stays on top!
+        grid_layout.addWidget(self.video_widget, 0, 0)
+        grid_layout.addWidget(self.video_overlay, 0, 0)
+        
+        self.media_layout.addWidget(v_cont, stretch=1)
+        # ========================================================
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
         self.media_layout.addWidget(self.slider)
@@ -249,12 +255,8 @@ class VideoPlayer(QMainWindow):
         def on_file(d): self.file_signal.emit(d)
         @sio.on('host_update')
         def on_host(d): self.host_update_signal.emit(d)
-        
-        # --- FIXED: ADDED THE MISSING HOST REQUEST LISTENER! ---
         @sio.on('host_request_received')
         def on_host_req(d): self.host_request_signal.emit(d)
-        # -------------------------------------------------------
-        
         @sio.on('reaction_event')
         def on_reac(d): self.reaction_signal.emit(d)
         @sio.on('laser_ping')
@@ -277,45 +279,38 @@ class VideoPlayer(QMainWindow):
         except Exception as e:
             self.error_signal.emit(f"⚠️ Connection Failed:\n{str(e)}\n\nCheck Render Start Command!")
 
-    # --- THE OVERLAY SYNC ENGINE ---
     def eventFilter(self, obj, ev):
-        # 1. Keep the transparent overlay perfectly aligned with the video player
-        if obj == self.video_widget and ev.type() in (QEvent.Type.Resize, QEvent.Type.Move):
-            geom = self.video_widget.geometry()
-            pt = self.video_widget.mapTo(self.cinema_widget, QPoint(0, 0))
-            self.video_overlay.setGeometry(pt.x(), pt.y(), geom.width(), geom.height())
-            self.video_overlay.raise_() # Force it above the graphics card!
-        
-        # 2. Capture clicks on the overlay for the Laser Pointer
-        if obj == self.video_overlay and ev.type() == QEvent.Type.MouseButtonPress:
+        # We only need to catch the click now! The Grid Layout handles all resizing automatically.
+        if obj == self.video_overlay and ev.type() == QEvent.MouseButtonPress:
             x_pct = ev.position().x() / self.video_overlay.width()
             y_pct = ev.position().y() / self.video_overlay.height()
             self.draw_laser({'x': x_pct, 'y': y_pct, 'color': self.my_color})
             sio.emit('laser_ping', {'x': x_pct, 'y': y_pct})
             return True
-            
         return super().eventFilter(obj, ev)
-    # -------------------------------
 
     @Slot(dict)
     def draw_laser(self, d):
         x, y, c = d['x'], d['y'], d['color']
         tx, ty = int(x * self.video_overlay.width()), int(y * self.video_overlay.height())
-        p = QWidget(self.video_overlay); p.show(); p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,255,255,50);")
+        p = QWidget(self.video_overlay)
+        p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,255,255,50);")
         p.setGeometry(tx-25, ty-25, 50, 50)
+        p.show() # Explicitly show the ping!
         a = QPropertyAnimation(p, b"geometry"); a.setDuration(800); a.setStartValue(QRect(tx-25, ty-25, 50, 50)); a.setEndValue(QRect(tx, ty, 0, 0))
         a.finished.connect(p.deleteLater); a.start(); self.active_animations.append(a)
 
     @Slot()
     def trigger_confetti(self):
         for _ in range(40):
-            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_overlay); l.setStyleSheet("font-size: 35px; background:transparent;"); l.show()
+            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_overlay)
+            l.setStyleSheet("font-size: 35px; background:transparent;")
+            l.show() # Explicitly show the confetti!
             sx, sy = self.video_overlay.width()//2, self.video_overlay.height()//2; l.move(sx, sy)
             ex, ey = sx + random.randint(-500, 500), sy + random.randint(-500, 500)
             a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(ex, ey)); a.setDuration(random.randint(1000, 2500)); a.setEasingCurve(QEasingCurve.OutExpo)
             a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
 
-    # --- THE NEW POLISHED UI THEMES ---
     def set_light_theme(self):
         self.setStyleSheet("background: #f9f9f9; color: #222;")
         self.cinema_widget.setStyleSheet("""
@@ -323,7 +318,6 @@ class VideoPlayer(QMainWindow):
             QPushButton:hover { background: #eee; }
             QLineEdit, QTextEdit { background: #ffffff; color: #111; border: 1px solid #ccc; border-radius: 5px; padding: 5px;}
         """)
-        # Specific host request button color
         self.request_host_btn.setStyleSheet("background: #E50914; color: white; border: none; border-radius: 5px; font-weight: bold; padding: 8px;")
         self.hype_bar.setStyleSheet("QProgressBar { border: 1px solid #ccc; border-radius: 4px; text-align: center; color: #333; background: #fff; font-weight: bold;} QProgressBar::chunk { background: #E50914; border-radius: 3px; }")
         self.chat_history.append("<i>☀️ Switched to Light Mode</i>")
@@ -335,19 +329,15 @@ class VideoPlayer(QMainWindow):
             QPushButton:hover { background: #3a3a3a; border: 1px solid #666;}
             QLineEdit, QTextEdit { background: #1a1a1a; color: white; border: 1px solid #333; border-radius: 5px; padding: 5px;}
         """)
-        # Specific host request button color
         self.request_host_btn.setStyleSheet("background: #E50914; color: white; border: none; border-radius: 5px; font-weight: bold; padding: 8px;")
         self.hype_bar.setStyleSheet("QProgressBar { border: 1px solid #444; border-radius: 4px; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: #E50914; border-radius: 3px; }")
         self.chat_history.append("<i>🌑 Switched to Ambient Mode</i>")
-    # ----------------------------------
 
     def toggle_fullscreen(self):
         if self.isFullScreen(): 
             self.showNormal(); self.social_panel_visible(True)
         else: 
             self.showFullScreen(); self.social_panel_visible(False)
-        # Force a geometry update for the overlay when swapping modes
-        QTimer.singleShot(100, lambda: self.video_overlay.setGeometry(self.video_widget.mapTo(self.cinema_widget, QPoint(0, 0)).x(), self.video_widget.mapTo(self.cinema_widget, QPoint(0, 0)).y(), self.video_widget.geometry().width(), self.video_widget.geometry().height()))
 
     def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
     
@@ -408,7 +398,6 @@ class VideoPlayer(QMainWindow):
         box.setText(f"{d['requester_name']} wants to be the Host. Grant control?")
         yes = box.addButton("Grant Control", QMessageBox.AcceptRole)
         box.addButton("Deny", QMessageBox.RejectRole)
-        # Apply current theme to popup
         if self.palette().window().color().name() == "#ffffff":
             box.setStyleSheet("background: white; color: black;")
         else:
