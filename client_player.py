@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayo
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect, QSizeF, QVariantAnimation
-from PySide6.QtGui import QColor, QPen, QBrush, QFont 
+from PySide6.QtGui import QColor, QPen, QBrush, QFont # Native 2D Drawing Tools
 
 sio = socketio.Client()
 
@@ -196,10 +196,14 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
+        # --- THE ANTI-BLACK-BOX FIX ---
         self.video_view = QGraphicsView()
         self.video_view.setStyleSheet("background: black; border: none;")
         self.video_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.video_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        # This single line forces the graphics card to repair the video frame instantly!
+        self.video_view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         
         self.video_scene = QGraphicsScene()
         self.video_view.setScene(self.video_scene)
@@ -208,9 +212,9 @@ class VideoPlayer(QMainWindow):
         self.video_scene.addItem(self.video_item)
         
         self.media_layout.addWidget(self.video_view, stretch=1)
-        
-        self.video_view.installEventFilter(self)
         self.video_view.viewport().installEventFilter(self)
+        self.video_view.installEventFilter(self)
+        # ------------------------------
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
         self.media_layout.addWidget(self.slider)
@@ -296,10 +300,12 @@ class VideoPlayer(QMainWindow):
             
         return super().eventFilter(obj, ev)
 
+    # ================== THE NATIVE GRAPHICS ANIMATIONS ==================
     @Slot(dict)
     def draw_laser(self, d):
         tx, ty = int(d['x'] * self.video_view.width()), int(d['y'] * self.video_view.height())
         
+        # We spawn a true vector ellipse directly into the scene DNA. No black boxes!
         ellipse = self.video_scene.addEllipse(0, 0, 0, 0, QPen(QColor(255, 0, 0), 4), QBrush(Qt.transparent))
         
         anim = QVariantAnimation(self)
@@ -309,6 +315,7 @@ class VideoPlayer(QMainWindow):
         anim.setEasingCurve(QEasingCurve.OutQuad)
         
         def update_droplet(val):
+            # Expands from 10 pixels to 100 pixels naturally
             size = 10 + (90 * val)
             ellipse.setRect(tx - size/2, ty - size/2, size, size)
             ellipse.setOpacity(1.0 - val) 
@@ -353,14 +360,15 @@ class VideoPlayer(QMainWindow):
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
         
-        def update_emoji(val):
-            txt.setPos(sx, sy - (250 * val)) 
-            if val > 0.7: txt.setOpacity((1.0 - val) * 3.3) 
+        def update_emoji(val, item=txt, start_x=sx, start_y=sy):
+            item.setPos(start_x, start_y - (250 * val)) 
+            if val > 0.7: item.setOpacity((1.0 - val) * 3.3) 
             
         anim.valueChanged.connect(update_emoji)
-        anim.finished.connect(lambda: self.video_scene.removeItem(txt))
+        anim.finished.connect(lambda item=txt: self.video_scene.removeItem(item))
         anim.start()
         self.active_animations.append(anim)
+    # ====================================================================
 
     def set_light_theme(self):
         self.setStyleSheet("background: #f9f9f9; color: #222;")
@@ -392,18 +400,23 @@ class VideoPlayer(QMainWindow):
 
     def social_panel_visible(self, v): [w.setVisible(v) for w in [self.chat_history, self.chat_input, self.open_btn, self.play_btn, self.light_mode_btn, self.ambient_mode_btn, self.hype_bar]]
     
+    # --- FIXED: SMART KEYBOARD SHORTCUTS ---
     def keyPressEvent(self, ev):
+        # Ignore shortcuts if you are typing in the chat!
         if isinstance(self.focusWidget(), (QLineEdit, QTextEdit)):
             super().keyPressEvent(ev)
             return
 
+        # Play/Pause on Spacebar
         if ev.key() == Qt.Key_Escape and self.isFullScreen(): 
             self.toggle_fullscreen()
         elif ev.key() == Qt.Key_Space:
             self.play_pause_clicked()
-        elif ev.key() == Qt.Key_Right:
+            
+        # Catch both Arrow Keys AND the literal "<" and ">" keys!
+        elif ev.key() in (Qt.Key_Right, Qt.Key_Greater, Qt.Key_Period):
             self.skip_video(forward=True)
-        elif ev.key() == Qt.Key_Left:
+        elif ev.key() in (Qt.Key_Left, Qt.Key_Less, Qt.Key_Comma):
             self.skip_video(forward=False)
         else:
             super().keyPressEvent(ev)
@@ -413,9 +426,10 @@ class VideoPlayer(QMainWindow):
         duration = self.media_player.duration()
         if duration == 0: return
 
-        if duration < 300000: step = 5000       
-        elif duration < 1200000: step = 10000   
-        else: step = 20000                      
+        # Dynamic skip lengths
+        if duration < 300000: step = 5000       # 5 sec jump for under 5 mins
+        elif duration < 1200000: step = 10000   # 10 sec jump for under 20 mins
+        else: step = 20000                      # 20 sec jump for movies
 
         current_pos = self.media_player.position()
         new_pos = current_pos + step if forward else current_pos - step
@@ -424,6 +438,7 @@ class VideoPlayer(QMainWindow):
         self.set_position(new_pos)
         dir_text = "forward" if forward else "backward"
         self.chat_history.append(f"<i style='color: gray;'>Skipped {step//1000}s {dir_text}...</i>")
+    # ---------------------------------------
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open MP4", "", "Video (*.mp4)")
