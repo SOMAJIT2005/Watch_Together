@@ -8,7 +8,7 @@ import threading
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
                                QLineEdit, QLabel, QMessageBox, QStackedWidget,
-                               QSlider, QGraphicsOpacityEffect, QProgressBar, QGridLayout)
+                               QSlider, QGraphicsOpacityEffect, QProgressBar)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtCore import QUrl, Signal, Slot, Qt, QTimer, QEvent, QPropertyAnimation, QPoint, QEasingCurve, QSequentialAnimationGroup, QRect
@@ -194,26 +194,14 @@ class VideoPlayer(QMainWindow):
         top.addWidget(self.host_status_label); top.addStretch(); top.addWidget(self.ping_label); top.addWidget(self.request_host_btn); top.addWidget(self.fullscreen_btn)
         self.media_layout.addLayout(top)
 
-        # ================== THE GRID STACK FIX ==================
-        # This forces the Overlay and Video to be identically sized!
-        v_cont = QWidget()
-        grid_layout = QGridLayout(v_cont)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        
+        # --- THE HARDWARE ACCELERATION ANIMATION FIX ---
         self.video_widget = QVideoWidget()
         self.video_widget.setStyleSheet("background: black;")
+        self.media_layout.addWidget(self.video_widget, stretch=1)
         
-        self.video_overlay = QWidget()
-        self.video_overlay.setStyleSheet("background: transparent;")
-        self.video_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.video_overlay.installEventFilter(self) # Catch laser clicks
-        
-        # Add both to Row 0, Col 0. The overlay is added second, so it stays on top!
-        grid_layout.addWidget(self.video_widget, 0, 0)
-        grid_layout.addWidget(self.video_overlay, 0, 0)
-        
-        self.media_layout.addWidget(v_cont, stretch=1)
-        # ========================================================
+        # We install the event filter DIRECTLY onto the video player to catch your mouse clicks!
+        self.video_widget.installEventFilter(self)
+        # -----------------------------------------------
 
         self.slider = QSlider(Qt.Horizontal); self.slider.sliderMoved.connect(self.set_position); self.slider.setEnabled(False)
         self.media_layout.addWidget(self.slider)
@@ -280,10 +268,10 @@ class VideoPlayer(QMainWindow):
             self.error_signal.emit(f"⚠️ Connection Failed:\n{str(e)}\n\nCheck Render Start Command!")
 
     def eventFilter(self, obj, ev):
-        # We only need to catch the click now! The Grid Layout handles all resizing automatically.
-        if obj == self.video_overlay and ev.type() == QEvent.MouseButtonPress:
-            x_pct = ev.position().x() / self.video_overlay.width()
-            y_pct = ev.position().y() / self.video_overlay.height()
+        # Listen for clicks directly on the Video Widget
+        if obj == self.video_widget and ev.type() == QEvent.Type.MouseButtonPress:
+            x_pct = ev.position().x() / max(1, self.video_widget.width())
+            y_pct = ev.position().y() / max(1, self.video_widget.height())
             self.draw_laser({'x': x_pct, 'y': y_pct, 'color': self.my_color})
             sio.emit('laser_ping', {'x': x_pct, 'y': y_pct})
             return True
@@ -292,24 +280,46 @@ class VideoPlayer(QMainWindow):
     @Slot(dict)
     def draw_laser(self, d):
         x, y, c = d['x'], d['y'], d['color']
-        tx, ty = int(x * self.video_overlay.width()), int(y * self.video_overlay.height())
-        p = QWidget(self.video_overlay)
+        tx, ty = int(x * self.video_widget.width()), int(y * self.video_widget.height())
+        
+        # Parent the ping DIRECTLY to the video player, and use a QLabel to ensure CSS borders draw!
+        p = QLabel(self.video_widget) 
         p.setStyleSheet(f"border: 4px solid {c}; border-radius: 25px; background: rgba(255,255,255,50);")
         p.setGeometry(tx-25, ty-25, 50, 50)
-        p.show() # Explicitly show the ping!
-        a = QPropertyAnimation(p, b"geometry"); a.setDuration(800); a.setStartValue(QRect(tx-25, ty-25, 50, 50)); a.setEndValue(QRect(tx, ty, 0, 0))
+        p.show() 
+        
+        a = QPropertyAnimation(p, b"geometry")
+        a.setDuration(800); a.setStartValue(QRect(tx-25, ty-25, 50, 50)); a.setEndValue(QRect(tx, ty, 0, 0))
         a.finished.connect(p.deleteLater); a.start(); self.active_animations.append(a)
 
     @Slot()
     def trigger_confetti(self):
         for _ in range(40):
-            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_overlay)
+            # Parent the confetti DIRECTLY to the video player
+            l = QLabel(random.choice(["🎉", "✨", "🔥", "🎊"]), self.video_widget)
             l.setStyleSheet("font-size: 35px; background:transparent;")
-            l.show() # Explicitly show the confetti!
-            sx, sy = self.video_overlay.width()//2, self.video_overlay.height()//2; l.move(sx, sy)
+            l.setAttribute(Qt.WA_TransparentForMouseEvents)
+            l.show() 
+            
+            sx, sy = self.video_widget.width()//2, self.video_widget.height()//2
+            l.move(sx, sy)
             ex, ey = sx + random.randint(-500, 500), sy + random.randint(-500, 500)
+            
             a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(ex, ey)); a.setDuration(random.randint(1000, 2500)); a.setEasingCurve(QEasingCurve.OutExpo)
             a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
+
+    def trigger_emoji(self, e):
+        # Parent the emojis DIRECTLY to the video player
+        l = QLabel(e, self.video_widget)
+        l.setStyleSheet("font-size: 48px; background:transparent;")
+        l.setAttribute(Qt.WA_TransparentForMouseEvents)
+        l.show()
+        
+        sx, sy = random.randint(20, max(20, self.video_widget.width()-80)), self.video_widget.height()-60
+        l.move(sx, sy)
+        
+        a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start()
+        self.active_animations.append(a)
 
     def set_light_theme(self):
         self.setStyleSheet("background: #f9f9f9; color: #222;")
@@ -371,12 +381,6 @@ class VideoPlayer(QMainWindow):
     def send_reaction(self, e): sio.emit('reaction_event', e); self.trigger_emoji(e)
     def handle_reac(self, d): self.trigger_emoji(d['emoji'])
     
-    def trigger_emoji(self, e):
-        l = QLabel(e, self.video_overlay); l.setStyleSheet("font-size: 48px; background:transparent;"); l.show()
-        sx, sy = random.randint(20, max(20, self.video_overlay.width()-80)), self.video_overlay.height()-60; l.move(sx, sy)
-        a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start()
-        self.active_animations.append(a)
-        
     def handle_sync(self, d):
         self.media_player.setPosition(d['time'])
         if d['action'] == 'pause': self.media_player.pause()
