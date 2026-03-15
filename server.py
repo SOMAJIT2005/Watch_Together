@@ -20,7 +20,7 @@ current_host_name = None
 global_hype = 0
 
 def send_auth_email(target_name, pin):
-    print(f"📧 Attempting to send email to {MY_EMAIL}...") # LOG TO RENDER
+    print(f"📧 Attempting to send email to {MY_EMAIL}...", flush=True) # FORCED LOG
     msg = EmailMessage()
     msg.set_content(f"Watch Together Security Alert\n\nUser '{target_name}' is requesting access to your private server.\nProvide them this 6-digit PIN: {pin}")
     msg['Subject'] = f"🔑 Access Request: {target_name}"
@@ -30,16 +30,16 @@ def send_auth_email(target_name, pin):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(SMTP_USER, SMTP_PASS)
             smtp.send_message(msg)
-        print("✅ Email sent successfully!") # LOG TO RENDER
+        print("✅ Email sent successfully!", flush=True) # FORCED LOG
         return True
     except Exception as e:
-        print(f"❌ SMTP Error: {e}") # LOG TO RENDER
+        print(f"❌ SMTP Error: {e}", flush=True) # FORCED LOG
         return False
 
 @socketio.on('request_cloud_pin')
 def handle_pin_request(data):
     name = data.get('name', 'Anonymous')
-    print(f"🚨 RECEIVED PIN REQUEST FROM: {name}") # LOG TO RENDER
+    print(f"🚨 RECEIVED PIN REQUEST FROM: {name}", flush=True) # FORCED LOG
     
     pin = str(random.randint(100000, 999999))
     unverified_requests[request.sid] = pin
@@ -54,11 +54,11 @@ def handle_verification(data):
     guess = data.get('pin')
     actual = unverified_requests.get(request.sid)
     if guess and guess == actual:
-        print(f"🔓 Access Granted for {request.sid}") # LOG TO RENDER
+        print(f"🔓 Access Granted for {request.sid}", flush=True)
         emit('auth_success')
         if request.sid in unverified_requests: del unverified_requests[request.sid]
     else:
-        print(f"🚫 Access Denied for {request.sid}") # LOG TO RENDER
+        print(f"🚫 Access Denied for {request.sid}", flush=True)
         emit('auth_failed')
 
 # --- CINEMA ROOM LOGIC ---
