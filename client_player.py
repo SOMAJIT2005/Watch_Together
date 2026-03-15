@@ -3,6 +3,7 @@ import os
 import time
 import random
 import socketio
+import threading # NEW: For background internet connections!
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                                QHBoxLayout, QWidget, QFileDialog, QTextEdit, 
@@ -26,6 +27,7 @@ class VideoPlayer(QMainWindow):
     laser_signal = Signal(dict)
     hype_signal = Signal(int)
     confetti_signal = Signal()
+    error_signal = Signal(str) # NEW: Safely handles server crashes
 
     def __init__(self):
         super().__init__()
@@ -37,8 +39,6 @@ class VideoPlayer(QMainWindow):
         
         self.setWindowTitle("Watch Together | CSE 2100 Project")
         self.resize(1100, 650) 
-        
-        # FIXED: Lock the entire app to dark mode immediately on boot
         self.setStyleSheet("QMainWindow { background-color: #121212; } QWidget { color: white; }") 
 
         self.my_filename = None       
@@ -71,16 +71,12 @@ class VideoPlayer(QMainWindow):
         self.curtain.hide()
 
         self.connected_signal.connect(self.transition_to_cinema)
+        self.error_signal.connect(self.handle_connection_error)
 
-    # --- FIXED: ABSOLUTE KILL SWITCH FOR GHOST HOSTS ---
     def closeEvent(self, event):
-        try:
-            sio.disconnect()
-        except:
-            pass
-        # Forcefully terminate the python background process so the server drops the user instantly
+        try: sio.disconnect()
+        except: pass
         os._exit(0) 
-    # ---------------------------------------------------
 
     def resizeEvent(self, event):
         self.curtain.resize(self.size())
@@ -133,7 +129,6 @@ class VideoPlayer(QMainWindow):
         self.splash_widget.setStyleSheet("background-color: #121212;") 
         layout = QVBoxLayout(self.splash_widget); layout.setAlignment(Qt.AlignCenter)
         
-        # FIXED: Explicitly set text color to white for the Welcome label
         self.welcome_label = QLabel(""); self.welcome_label.setStyleSheet("font-size: 32px; font-weight: bold; color: white;")
         self.panda_label = QLabel("🐼🍿"); self.panda_label.setStyleSheet("font-size: 65px; margin-top: 20px; color: white;")
         self.loading_label = QLabel("Connecting..."); self.loading_label.setStyleSheet("font-size: 18px; color: #aaa;")
@@ -150,11 +145,38 @@ class VideoPlayer(QMainWindow):
     def start_login_process(self):
         self.username = self.name_input.text().strip() or "Guest"
         self.welcome_label.setText(f"Welcome to the Cinema, {self.username}.")
-        self.animate_stack_transition(1, callback=lambda: (self.p_timer.start(250), self.connect_to_server()))
+        self.animate_stack_transition(1, callback=self.initiate_network)
+
+    # --- NEW: MULTITHREADED CONNECTION MANAGER ---
+    def initiate_network(self):
+        self.p_timer.start(250) 
+        
+        # We restore the 4-second delay warning text!
+        self.server_wait_timer = QTimer(self)
+        self.server_wait_timer.setSingleShot(True)
+        self.server_wait_timer.timeout.connect(self.show_render_warning)
+        self.server_wait_timer.start(4000) 
+
+        # Put the connection task in the background so the UI doesn't freeze
+        threading.Thread(target=self.connect_to_server, daemon=True).start()
+
+    def show_render_warning(self):
+        self.loading_label.setText("Waking up Cloud Server...\n(Free tier takes ~50 seconds. Please wait!)")
+        self.loading_label.setStyleSheet("font-size: 16px; color: #ffcc00; margin-top: 10px;")
+
+    @Slot(str)
+    def handle_connection_error(self, msg):
+        self.p_timer.stop() # Stop the panda
+        self.server_wait_timer.stop()
+        self.loading_label.setText(msg)
+        self.loading_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ff3333; margin-top: 10px;")
+    # ---------------------------------------------
 
     @Slot()
     def transition_to_cinema(self):
-        self.p_timer.stop(); self.set_ambient_theme()
+        self.p_timer.stop()
+        if hasattr(self, 'server_wait_timer'): self.server_wait_timer.stop()
+        self.set_ambient_theme()
         self.animate_stack_transition(2, callback=lambda: QTimer.singleShot(100, self.start_ping_tracker))
 
     def build_main_cinema(self):
@@ -237,25 +259,17 @@ class VideoPlayer(QMainWindow):
             a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(ex, ey)); a.setDuration(random.randint(1000, 2500)); a.setEasingCurve(QEasingCurve.OutExpo)
             a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
 
-    # --- FIXED: DYNAMIC HYPE BAR COLORS ---
     def set_light_theme(self):
         self.setStyleSheet("background: white; color: black;")
         self.cinema_widget.setStyleSheet("QPushButton { background: white; color: black; border: 1px solid #ccc; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: white; color: black; }")
-        
-        # Light mode specific hype bar
         self.hype.setStyleSheet("QProgressBar { border: 2px solid #ccc; text-align: center; color: black; background: #eee; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
-        
         self.chat_history.append("<i>☀️ Light Mode On</i>")
 
     def set_ambient_theme(self):
         self.setStyleSheet("background: #121212; color: white;")
         self.cinema_widget.setStyleSheet("QPushButton { background: #222; color: white; border: 1px solid #E50914; font-weight: bold; padding: 10px;} QLineEdit, QTextEdit { background: #1a1a1a; color: white; }")
-        
-        # Ambient mode specific hype bar
         self.hype.setStyleSheet("QProgressBar { border: 2px solid #333; text-align: center; color: white; background: #222; font-weight: bold;} QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ff0000); }")
-        
         self.chat_history.append("<i>🌑 Ambient Mode On</i>")
-    # ----------------------------------------
 
     def toggle_fullscreen(self):
         if self.isFullScreen(): self.showNormal(); self.social_panel_visible(True)
@@ -278,6 +292,7 @@ class VideoPlayer(QMainWindow):
         self.player.pause() if act == 'pause' else self.player.play()
 
     def connect_to_server(self):
+        # We wrap the events inside so they only trigger after a successful connection
         @sio.on('connect')
         def on_con(): sio.emit('join', {'name': self.username, 'avatar': self.my_avatar, 'color': self.my_color}); self.connected_signal.emit()
         @sio.on('sync_event')
@@ -298,22 +313,33 @@ class VideoPlayer(QMainWindow):
         def on_conf(): self.confetti_signal.emit()
         @sio.on('pong_client')
         def on_pong(): self.ping_signal.emit(int((time.time() - self.last_ping_time) * 1000))
-        try: sio.connect(self.server_url)
-        except: self.loading_label.setText("⚠️ Offline")
+        
+        try: 
+            sio.connect(self.server_url)
+        except Exception as e:
+            # If the server is hard-crashed on Render, safely tell the UI to show the error
+            self.error_signal.emit("⚠️ Server Offline. Check Render.com Dashboard logs!")
 
     def send_ping(self): self.last_ping_time = time.time(); sio.emit('ping_server')
     def start_ping_tracker(self): self.p_tracker = QTimer(self); self.p_tracker.timeout.connect(self.send_ping); self.p_tracker.start(2000)
     def update_ping(self, l): self.ping_label.setText(f"📶 Ping: {l}ms"); self.ping_label.setStyleSheet(f"color: {'green' if l<150 else 'red'}; font-weight: bold;")
+    
     def send_chat_message(self):
         t = self.inp.text()
-        if t.strip(): self.hist.append(f"<b style='color:{self.my_color};'>{self.my_avatar} You:</b> {t}"); sio.emit('chat_event', t); self.inp.clear()
+        if t.strip():
+            self.hist.append(f"<b style='color:{self.my_color};'>{self.my_avatar} You:</b> {t}")
+            sio.emit('chat_event', t); self.inp.clear()
+            
     def handle_chat(self, d): self.hist.append(f"<b style='color:{d['color']};'>{d['avatar']} {d['sender']}:</b> {d['text']}")
     def send_reaction(self, e): sio.emit('reaction_event', e); self.trigger_emoji(e)
     def handle_reac(self, d): self.trigger_emoji(d['emoji'])
+    
     def trigger_emoji(self, e):
         l = QLabel(e, self.video_overlay); l.setStyleSheet("font-size: 48px; background:transparent;"); l.show()
         sx, sy = random.randint(20, max(20, self.video_overlay.width()-80)), self.video_overlay.height()-60; l.move(sx, sy)
-        a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start(); self.active_animations.append(a)
+        a = QPropertyAnimation(l, b"pos"); a.setEndValue(QPoint(sx, sy-250)); a.setDuration(2500); a.finished.connect(l.deleteLater); a.start()
+        self.active_animations.append(a)
+        
     def handle_sync(self, d):
         self.player.setPosition(d['time'])
         if d['action'] == 'pause': self.player.pause()
