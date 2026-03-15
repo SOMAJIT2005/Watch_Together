@@ -343,9 +343,20 @@ class VideoPlayer(QMainWindow):
         if d['action'] == 'pause': self.media_player.pause()
         elif d['action'] == 'play': self.media_player.play()
     def handle_file(self, d): self.friend_filename = d['filename']; self.chat_history.append(f"⚠️ Friend loaded: {d['filename']}")
+    # --- 100% BULLETPROOF HOST DETECTION ---
     def handle_host(self, d):
-        self.is_host = (d['host_sid'] == sio.sid); self.host_status_label.setText(f"👑 Host: {'You (' + d['host_name'] + ')' if self.is_host else d['host_name']}")
-        self.play_btn.setEnabled(self.is_host); self.slider.setEnabled(self.is_host); self.request_host_btn.setVisible(not self.is_host)
+        # We check the network ID, but if the thread is too slow, we fall back to an exact Name Match!
+        self.is_host = (d['host_sid'] == self.my_sid) or (d['host_name'] == self.username)
+        
+        if self.is_host:
+            self.host_status_label.setText(f"👑 Host: You ({d['host_name']})")
+        else:
+            self.host_status_label.setText(f"👑 Host: {d['host_name']}")
+            
+        self.play_btn.setEnabled(self.is_host)
+        self.slider.setEnabled(self.is_host)
+        self.request_host_btn.setVisible(not self.is_host)
+    # ---------------------------------------
     def request_host_clicked(self): sio.emit('request_host'); self.chat_history.append("<i>🙋 Requesting...</i>")
     def handle_host_dialog(self, d):
         box = QMessageBox(self); box.setText(f"{d['requester_name']} wants Host. Grant?"); yes = box.addButton("Grant", QMessageBox.AcceptRole); box.addButton("Deny", QMessageBox.RejectRole); box.exec()
