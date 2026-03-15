@@ -114,17 +114,33 @@ class VideoPlayer(QMainWindow):
             QMessageBox.warning(self, "Offline", "Not connected to the cloud server yet.")
 
     def handle_auth_result(self, res):
-        self.req_btn.setText("Request PIN via Cloud Server")
-        self.req_btn.setEnabled(True)
-        
         if res == "SUCCESS":
+            self.req_btn.setText("Request PIN via Cloud Server")
+            self.req_btn.setEnabled(True)
             try:
                 with open(self.license_path, "w") as f: f.write("VERIFIED")
             except: pass
             self.animate_stack_transition(1)
-        elif res == "FAILED": QMessageBox.warning(self, "Denied", "Incorrect PIN.")
-        elif res.startswith("ERROR:"): QMessageBox.warning(self, "Please Wait", res)
-        else: QMessageBox.information(self, "Status", res)
+            
+        elif res == "FAILED": 
+            self.req_btn.setText("Request PIN via Cloud Server")
+            self.req_btn.setEnabled(True)
+            # Fix popup styling for dark mode
+            box = QMessageBox(self); box.setWindowTitle("Denied"); box.setText("Incorrect PIN.")
+            box.setStyleSheet("background: #222; color: white;"); box.exec()
+            
+        elif res.startswith("ERROR:"): 
+            self.req_btn.setText("Request PIN via Cloud Server")
+            self.req_btn.setEnabled(True)
+            box = QMessageBox(self); box.setWindowTitle("Please Wait"); box.setText(res)
+            box.setStyleSheet("background: #222; color: white;"); box.exec()
+            
+        else: 
+            # THE FIX: No more popup! Just turn the button green and show the message.
+            self.req_btn.setText("✅ Request Sent! Ask Admin for PIN.")
+            self.req_btn.setStyleSheet("background: #00aa00; padding: 12px; font-weight: bold; color: white; border-radius: 5px;")
+            # Re-enable the button after 5 seconds just in case they need to send again
+            QTimer.singleShot(5000, lambda: (self.req_btn.setText("Request PIN via Cloud Server"), self.req_btn.setStyleSheet("background: #444; padding: 12px; font-weight: bold; color: white; border-radius: 5px;"), self.req_btn.setEnabled(True)))
 
     def closeEvent(self, event):
         try: sio.disconnect(); time.sleep(0.5)
