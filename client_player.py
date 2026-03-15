@@ -52,12 +52,22 @@ class VideoPlayer(QMainWindow):
         self.connected_signal.connect(self.transition_to_cinema)
         self.error_signal.connect(lambda m: QMessageBox.critical(self, "Error", m))
 
+    # --- UPDATED AUTH SCREEN UI ---
     def build_auth_screen(self):
         self.auth_widget = QWidget(); layout = QVBoxLayout(self.auth_widget); layout.setAlignment(Qt.AlignCenter)
         t = QLabel("🔐 Cloud Security"); t.setStyleSheet("font-size: 32px; font-weight: bold; color: #E50914;")
         d = QLabel("This application is private. Request a PIN to your email to unlock."); d.setStyleSheet("color: #aaa; margin: 20px;")
         
+        # New Text Box for the User's Name
+        self.name_req_input = QLineEdit(); self.name_req_input.setPlaceholderText("Enter your name here...")
+        self.name_req_input.setFixedWidth(300)
+        self.name_req_input.setStyleSheet("font-size: 16px; padding: 12px; background: #222; border: 1px solid #444; border-radius: 5px; color: white;")
+        
         self.req_btn = QPushButton("Request PIN via Cloud Server"); self.req_btn.setFixedWidth(300); self.req_btn.setStyleSheet("background: #444; padding: 12px; font-weight: bold;")
+        
+        # Spacing
+        sep = QWidget(); sep.setFixedHeight(20)
+        
         self.pin_in = QLineEdit(); self.pin_in.setPlaceholderText("Enter 6-digit PIN..."); self.pin_in.setFixedWidth(300); self.pin_in.setEchoMode(QLineEdit.Password)
         self.pin_in.setStyleSheet("font-size: 18px; padding: 12px; background: #222; border: 1px solid #444; border-radius: 5px; color: white;")
         self.v_btn = QPushButton("Verify PIN"); self.v_btn.setFixedWidth(300); self.v_btn.setStyleSheet("background: #E50914; padding: 12px; font-weight: bold;")
@@ -66,29 +76,48 @@ class VideoPlayer(QMainWindow):
         self.v_btn.clicked.connect(self.cloud_verify_clicked)
         self.pin_in.returnPressed.connect(self.cloud_verify_clicked)
         
-        layout.addWidget(t); layout.addWidget(d); layout.addWidget(self.req_btn); layout.addWidget(self.pin_in); layout.addWidget(self.v_btn)
+        layout.addWidget(t); layout.addWidget(d)
+        layout.addWidget(self.name_req_input); layout.addWidget(self.req_btn)
+        layout.addWidget(sep)
+        layout.addWidget(self.pin_in); layout.addWidget(self.v_btn)
         self.app_stack.addWidget(self.auth_widget)
 
     def cloud_request_clicked(self):
-        name, ok = QInputDialog.getText(self, "Identify", "Enter your name for the PIN request:")
-        if ok and name:
-            if not sio.connected: 
-                threading.Thread(target=lambda: sio.connect(self.server_url, wait_timeout=10), daemon=True).start()
-                QTimer.singleShot(2500, lambda: sio.emit('request_cloud_pin', {'name': name}))
-            else: sio.emit('request_cloud_pin', {'name': name})
+        name = self.name_req_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Name Required", "Please enter your name first so the developer knows who is requesting access.")
+            return
+
+        self.req_btn.setText("Sending Request to Cloud...")
+        self.req_btn.setEnabled(False)
+        
+        def attempt_request():
+            try:
+                if not sio.connected: 
+                    sio.connect(self.server_url, wait_timeout=15)
+                sio.emit('request_cloud_pin', {'name': name})
+            except Exception as e:
+                self.auth_signal.emit(f"ERROR: {str(e)}")
+
+        threading.Thread(target=attempt_request, daemon=True).start()
 
     def cloud_verify_clicked(self):
         if not self.pin_in.text(): return
         sio.emit('verify_cloud_pin', {'pin': self.pin_in.text()})
 
     def handle_auth_result(self, res):
+        self.req_btn.setText("Request PIN via Cloud Server")
+        self.req_btn.setEnabled(True)
+        
         if res == "SUCCESS":
             try:
                 with open(self.license_path, "w") as f: f.write("VERIFIED")
             except: pass
             self.animate_stack_transition(1)
         elif res == "FAILED": QMessageBox.warning(self, "Denied", "Incorrect PIN.")
-        else: QMessageBox.information(self, "Sent", res)
+        elif res.startswith("ERROR:"): QMessageBox.critical(self, "Connection Error", f"Server Offline: {res}")
+        else: QMessageBox.information(self, "Status", res)
+    # -------------------------------
 
     def closeEvent(self, event):
         try: sio.disconnect(); time.sleep(0.5)
@@ -202,7 +231,7 @@ class VideoPlayer(QMainWindow):
                 self.connected_signal.emit()
                 
         @sio.on('pin_request_sent')
-        def on_ps(): self.auth_signal.emit("PIN request sent! Check with somajitdeb2005@gmail.com.")
+        def on_ps(): self.auth_signal.emit("PIN Request Sent! Check your email.")
         @sio.on('auth_success')
         def on_as(): self.auth_signal.emit("SUCCESS")
         @sio.on('auth_failed')
@@ -246,7 +275,7 @@ class VideoPlayer(QMainWindow):
             self.video_item.setSize(QSizeF(ev.size().width(), ev.size().height())); self.video_scene.setSceneRect(0, 0, ev.size().width(), ev.size().height())
         if obj == self.video_view.viewport() and ev.type() == QEvent.Type.MouseButtonPress:
             self.setFocus(); x_pct = ev.position().x() / max(1, self.video_view.width()); y_pct = ev.position().y() / max(1, self.video_view.height())
-            self.draw_laser({'x': x_pct, 'y': y_pct}); sio.emit('laser_ping', {'x': x_pct, 'y': y_pct}); return True
+            self.draw_laser({'x': x_pct, 'y': y_pct, 'color': self.my_color}); sio.emit('laser_ping', {'x': x_pct, 'y': y_pct}); return True
         return super().eventFilter(obj, ev)
 
     @Slot(dict)
